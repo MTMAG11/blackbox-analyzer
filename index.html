@@ -2,29 +2,123 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>FPV Blackbox Analysis - Phase 0 Decoder Test</title>
+<title>FPV Blackbox Flight Replay Dashboard</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.32/dist/uPlot.min.css">
 <style>
-  body { font-family: system-ui, sans-serif; margin: 2rem; background: #111; color: #eee; }
-  h1 { font-size: 1.2rem; }
-  #output { white-space: pre-wrap; font-family: Consolas, monospace; font-size: 0.85rem;
-            background: #000; padding: 1rem; border-radius: 6px; margin-top: 1rem; min-height: 200px; }
-  input[type=file] { margin-top: 1rem; }
+  :root {
+    color-scheme: light;
+    --surface-1: #fcfcfb;
+    --page: #f9f9f7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    --series-1: #2a78d6; /* blue */
+    --series-2: #008300; /* green */
+    --series-3: #e87ba4; /* magenta */
+    --series-4: #eda100; /* yellow */
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --surface-1: #1a1a19;
+      --page: #0d0d0d;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #898781;
+      --grid: #2c2c2a;
+      --axis: #383835;
+      --border: rgba(255, 255, 255, 0.10);
+      --series-1: #3987e5;
+      --series-2: #008300;
+      --series-3: #d55181;
+      --series-4: #c98500;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    margin: 0;
+    background: var(--page);
+    color: var(--text-primary);
+  }
+  header { padding: 1rem 1.5rem 0.5rem; }
+  h1 { font-size: 1.15rem; margin: 0 0 0.25rem; }
+  .subtitle { color: var(--text-secondary); font-size: 0.85rem; margin: 0 0 1rem; max-width: 60em; }
+  .controls {
+    display: flex; gap: 0.75rem; align-items: center;
+    padding: 0 1.5rem 1rem; flex-wrap: wrap;
+  }
+  select, input[type=file] {
+    font: inherit; color: var(--text-primary); background: var(--surface-1);
+    border: 1px solid var(--border); border-radius: 6px; padding: 0.4rem 0.6rem;
+  }
+  .info-panel {
+    margin: 0 1.5rem 0.75rem; padding: 0.75rem 1rem;
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 8px; font-size: 0.82rem; color: var(--text-secondary);
+    line-height: 1.6; display: none;
+  }
+  .info-panel.visible { display: block; }
+  .info-panel b { color: var(--text-primary); }
+  .gps-note {
+    margin: 0 1.5rem 1rem; padding: 0.6rem 1rem;
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 8px; font-size: 0.8rem; color: var(--text-secondary);
+    display: none;
+  }
+  .gps-note.visible { display: block; }
+  main { padding: 0 1.5rem 2rem; display: none; }
+  main.visible { display: block; }
+  .chart-panel {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 8px; padding: 0.75rem 1rem 0.25rem; margin-bottom: 1rem;
+  }
+  .chart-panel h3 {
+    margin: 0 0 0.5rem; font-size: 0.85rem; font-weight: 600;
+    color: var(--text-primary);
+  }
+  .u-legend { color: var(--text-secondary) !important; font-size: 0.75rem; }
+  .placeholder { padding: 4rem 1.5rem; text-align: center; color: var(--text-secondary); }
 </style>
 </head>
 <body>
-<h1>FPV Blackbox Analysis Platform &mdash; Phase 0: Decoder Verification</h1>
-<p>This page is a bare-bones test harness. It is not the real dashboard &mdash;
-it just proves the .bbl decoder correctly parses a real log file before we
-build charts on top of it.</p>
 
-<input type="file" id="fileInput" accept=".bbl,.bfl,.csv">
+<header>
+  <h1>FPV Blackbox Flight Replay Dashboard</h1>
+  <p class="subtitle">Client-side only &mdash; your log never leaves this browser. Choose a
+  <code>.bbl</code> file to replay throttle/stick inputs, gyro, PID terms, battery voltage,
+  motor outputs, and orientation.</p>
+</header>
 
-<div id="output">Choose a .bbl file above to decode it.</div>
+<div class="controls">
+  <input type="file" id="fileInput" accept=".bbl,.bfl">
+  <select id="segmentSelect" style="display:none;"></select>
+</div>
 
+<div class="info-panel" id="infoPanel"></div>
+<div class="gps-note" id="gpsNote">Orientation shown, not position &mdash; no GPS in this log.</div>
+
+<main id="main">
+  <div id="charts"></div>
+</main>
+
+<div class="placeholder" id="placeholder">Choose a .bbl file above to load a flight.</div>
+
+<script src="https://cdn.jsdelivr.net/npm/uplot@1.6.32/dist/uPlot.iife.min.js"></script>
 <script src="src/tools.js"></script>
 <script src="src/datastream.js"></script>
 <script src="src/decoders.js"></script>
 <script src="src/decoder.js"></script>
+<script src="src/units.js"></script>
+<script src="src/charts.js"></script>
 <script src="src/app.js"></script>
+<script>
+  el("fileInput").addEventListener("change", () => {
+    el("placeholder").style.display = "none";
+  });
+</script>
 </body>
 </html>

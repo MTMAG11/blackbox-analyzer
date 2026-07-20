@@ -1,7 +1,7 @@
 /*
- * Phase 0 test harness: load a .bbl file, run it through the decoder, and
- * print out header config + sample frame values so we can eyeball them
- * against known-good numbers from the log.
+ * Phase 1: Flight Replay Dashboard. Original code (not ported from
+ * Betaflight blackbox-log-viewer) - orchestrates the decoder (decoder.js)
+ * and unit conversions (units.js) into charts (charts.js).
  */
 
 function findLogSegments(bytes) {
@@ -20,9 +20,6 @@ function findLogSegments(bytes) {
   }
 
   if (starts.length === 0) {
-    // Not every log necessarily begins exactly at byte 0 with this marker
-    // intact (e.g. if truncated) - fall back to treating the whole file as
-    // one segment so parseHeader can at least try.
     return [{ start: 0, end: bytes.length }];
   }
 
@@ -36,75 +33,220 @@ function findLogSegments(bytes) {
   return segments;
 }
 
-function fieldRow(names, frame) {
-  if (!frame) return "(no frame captured)";
-  return names.map((name, i) => `${name}=${frame[i]}`).join("  ");
-}
-
 function el(id) {
   return document.getElementById(id);
 }
 
-function log(msg) {
-  el("output").textContent += `${msg}\n`;
-}
-
-function analyzeLog(bytes) {
-  el("output").textContent = "";
-
-  const segments = findLogSegments(bytes);
-  log(`Found ${segments.length} flight log segment(s) in this file. Showing segment 1.\n`);
-
-  const segment = segments[0];
+function buildDataset(bytes, segment) {
   const parser = new FlightLogParser(bytes);
 
-  let firstIFrame = null;
-  let firstPFrame = null;
-  let frameCount = { I: 0, P: 0, S: 0, E: 0 };
+  const t = [];
+  const stick = [[], [], [], []]; // roll, pitch, yaw, throttle (rcCommand[0..3], raw)
+  const gyroFilt = [[], [], []]; // deg/s
+  const gyroUnfilt = [[], [], []]; // deg/s
+  const pid = { P: [[], [], []], I: [[], [], []], D: [[], [], []], F: [[], [], []] };
+  const vbat = []; // volts if convertible, else raw
+  const motor = [[], [], [], []];
+  const attRoll = [],
+    attPitch = [],
+    attHeading = [];
+  const frameCount = { I: 0, P: 0, S: 0, E: 0 };
 
-  parser.onFrameReady = (valid, frame, frameType, _start, _size) => {
+  let idx = null;
+  let hasGyroUnfilt = false;
+  let hasQuat = false;
+  let vbatIsVolts = false;
+  let t0 = null;
+
+  parser.onFrameReady = (valid, frame, frameType) => {
     if (!valid) return;
     frameCount[frameType] = (frameCount[frameType] || 0) + 1;
-    if (frameType === "I" && !firstIFrame) firstIFrame = frame.slice();
-    if (frameType === "P" && !firstPFrame) firstPFrame = frame.slice();
+
+    if (frameType !== "I" && frameType !== "P") return;
+
+    const time = frame[idx.time];
+    if (t0 === null) t0 = time;
+    t.push((time - t0) / 1e6);
+
+    for (let axis = 0; axis < 4; axis++) {
+      const i = idx[`rcCommand[${axis}]`];
+      stick[axis].push(i !== undefined ? frame[i] : NaN);
+    }
+
+    for (let axis = 0; axis < 3; axis++) {
+      const fi = idx[`gyroADC[${axis}]`];
+      gyroFilt[axis].push(
+        fi !== undefined ? BBLUnits.gyroRawToDegreesPerSecond(parser.sysConfig, frame[fi]) : NaN,
+      );
+
+      if (hasGyroUnfilt) {
+        const ui = idx[`gyroUnfilt[${axis}]`];
+        gyroUnfilt[axis].push(BBLUnits.gyroRawToDegreesPerSecond(parser.sysConfig, frame[ui]));
+      } else {
+        gyroUnfilt[axis].push(NaN);
+      }
+    }
+
+    for (const term of ["P", "I", "D", "F"]) {
+      for (let axis = 0; axis < 3; axis++) {
+        const i = idx[`axis${term}[${axis}]`];
+        pid[term][axis].push(i !== undefined ? frame[i] : NaN);
+      }
+    }
+
+    {
+      const i = idx["vbatLatest"];
+      if (i === undefined) {
+        vbat.push(NaN);
+      } else {
+        const volts = vbatIsVolts ? BBLUnits.vbatLatestToVolts(parser.sysConfig, frame[i]) : null;
+        vbat.push(volts !== null ? volts : frame[i]);
+      }
+    }
+
+    for (let m = 0; m < 4; m++) {
+      const i = idx[`motor[${m}]`];
+      motor[m].push(i !== undefined ? frame[i] : NaN);
+    }
+
+    if (hasQuat) {
+      const att = BBLUnits.quaternionToEulerDegrees(
+        frame[idx["imuQuaternion[0]"]],
+        frame[idx["imuQuaternion[1]"]],
+        frame[idx["imuQuaternion[2]"]],
+      );
+      attRoll.push(att.rollDeg);
+      attPitch.push(att.pitchDeg);
+      attHeading.push(att.headingDeg);
+    }
   };
 
   parser.parseHeader(segment.start, segment.end);
+
+  idx = parser.frameDefs.I.nameToIndex;
+  hasGyroUnfilt = idx["gyroUnfilt[0]"] !== undefined;
+  hasQuat =
+    idx["imuQuaternion[0]"] !== undefined &&
+    idx["imuQuaternion[1]"] !== undefined &&
+    idx["imuQuaternion[2]"] !== undefined;
+  vbatIsVolts = BBLUnits.vbatLatestToVolts(parser.sysConfig, 0) !== null;
+
   parser.parseLogData(false, undefined, segment.end);
 
-  const sc = parser.sysConfig;
-
-  log("=== Header / sysConfig ===");
-  log(`Firmware: ${sc.Product ?? "?"} / ${sc["Firmware revision"] ?? "?"}`);
-  log(`Board: ${sc["Board information"] ?? "?"}`);
-  log(`Looptime: ${sc.looptime ?? "?"} us`);
-  log(`rollPID: ${JSON.stringify(sc.rollPID)}`);
-  log(`pitchPID: ${JSON.stringify(sc.pitchPID)}`);
-  log(`yawPID: ${JSON.stringify(sc.yawPID)}`);
-  log(`minthrottle/maxthrottle: ${sc.minthrottle} / ${sc.maxthrottle}`);
-  log(`vbatref: ${sc.vbatref}`);
-  log("");
-
-  log("=== Frame field names (I/P frame) ===");
-  log(parser.frameDefs.I.name.join(", "));
-  log("");
-
-  log("=== Frame counts ===");
-  log(JSON.stringify(frameCount));
-  log("");
-
-  log("=== First I-frame values ===");
-  log(fieldRow(parser.frameDefs.I.name, firstIFrame));
-  log("");
-
-  log("=== First P-frame values ===");
-  log(fieldRow(parser.frameDefs.P.name, firstPFrame));
-  log("");
-
-  log("=== Parse stats ===");
-  log(`Total bytes: ${parser.stats.totalBytes}`);
-  log(`Corrupt frames: ${parser.stats.totalCorruptFrames}`);
+  return {
+    sysConfig: parser.sysConfig,
+    stats: parser.stats,
+    frameCount,
+    t,
+    stick,
+    gyroFilt,
+    gyroUnfilt,
+    hasGyroUnfilt,
+    pid,
+    vbat,
+    vbatIsVolts,
+    motor,
+    hasQuat,
+    attRoll,
+    attPitch,
+    attHeading,
+  };
 }
+
+function fmtDuration(seconds) {
+  const m = Math.floor(seconds / 60);
+  const s = (seconds % 60).toFixed(1);
+  return `${m}m ${s}s`;
+}
+
+function renderInfoPanel(ds) {
+  const sc = ds.sysConfig;
+  const duration = ds.t.length ? ds.t[ds.t.length - 1] : 0;
+
+  el("infoPanel").innerHTML = `
+    <b>${sc.Product ?? "Betaflight log"}</b> &mdash; ${sc["Firmware revision"] ?? "?"} &mdash; ${sc["Board information"] ?? "?"}<br>
+    Duration: <b>${fmtDuration(duration)}</b> &nbsp;|&nbsp;
+    Loop time: <b>${sc.looptime ?? "?"}&micro;s</b> &nbsp;|&nbsp;
+    Frames: I=${ds.frameCount.I ?? 0}, P=${ds.frameCount.P ?? 0}, corrupt=${ds.stats.totalCorruptFrames}<br>
+    rollPID ${JSON.stringify(sc.rollPID)} &nbsp; pitchPID ${JSON.stringify(sc.pitchPID)} &nbsp; yawPID ${JSON.stringify(sc.yawPID)}
+    ${ds.vbatIsVolts ? "" : "<br><i>Note: battery voltage shown in raw units - unrecognized firmware version for the volts conversion.</i>"}
+  `;
+  el("infoPanel").classList.add("visible");
+  el("gpsNote").classList.add("visible");
+}
+
+function renderDashboard(ds) {
+  BBLCharts.clearAll();
+  const chartsRoot = el("charts");
+  chartsRoot.innerHTML = "";
+
+  renderInfoPanel(ds);
+
+  // 1. Stick & throttle inputs
+  BBLCharts.createLineChart(chartsRoot, "Stick & Throttle Inputs (raw rcCommand)", ds.t, [
+    { label: "Roll", slot: 1, data: ds.stick[0] },
+    { label: "Pitch", slot: 2, data: ds.stick[1] },
+    { label: "Yaw", slot: 3, data: ds.stick[2] },
+    { label: "Throttle", slot: 4, data: ds.stick[3] },
+  ]);
+
+  // 2. Gyro filtered vs unfiltered, one chart per axis
+  const axisNames = ["Roll", "Pitch", "Yaw"];
+  for (let axis = 0; axis < 3; axis++) {
+    const seriesDefs = [{ label: `${axisNames[axis]} (filtered)`, slot: axis + 1, data: ds.gyroFilt[axis] }];
+    if (ds.hasGyroUnfilt) {
+      seriesDefs.push({ label: `${axisNames[axis]} (unfiltered)`, slot: axis + 1, data: ds.gyroUnfilt[axis], dashed: true });
+    }
+    BBLCharts.createLineChart(chartsRoot, `Gyro ${axisNames[axis]} (deg/s)`, ds.t, seriesDefs);
+  }
+
+  // 3. PID terms, one chart per axis
+  const pidSlots = { P: 1, I: 2, D: 3, F: 4 };
+  for (let axis = 0; axis < 3; axis++) {
+    const seriesDefs = [];
+    for (const term of ["P", "I", "D", "F"]) {
+      if (ds.pid[term][axis].some((v) => !Number.isNaN(v))) {
+        seriesDefs.push({ label: term, slot: pidSlots[term], data: ds.pid[term][axis] });
+      }
+    }
+    BBLCharts.createLineChart(chartsRoot, `${axisNames[axis]} PID Terms (raw)`, ds.t, seriesDefs);
+  }
+
+  // 4. Battery voltage
+  BBLCharts.createLineChart(
+    chartsRoot,
+    ds.vbatIsVolts ? "Battery Voltage (V)" : "Battery (raw units)",
+    ds.t,
+    [{ label: "vbat", slot: 1, data: ds.vbat }],
+  );
+
+  // 5. Motor outputs
+  BBLCharts.createLineChart(chartsRoot, "Motor Outputs (raw)", ds.t, [
+    { label: "Motor 0", slot: 1, data: ds.motor[0] },
+    { label: "Motor 1", slot: 2, data: ds.motor[1] },
+    { label: "Motor 2", slot: 3, data: ds.motor[2] },
+    { label: "Motor 3", slot: 4, data: ds.motor[3] },
+  ]);
+
+  // 6. Attitude (orientation only - no GPS, no spatial position)
+  if (ds.hasQuat) {
+    BBLCharts.createLineChart(chartsRoot, "Attitude - orientation only, not position (deg)", ds.t, [
+      { label: "Roll", slot: 1, data: ds.attRoll },
+      { label: "Pitch", slot: 2, data: ds.attPitch },
+      { label: "Heading", slot: 3, data: ds.attHeading },
+    ]);
+  }
+
+  el("main").classList.add("visible");
+}
+
+function loadSegment(bytes, segments, segmentIndex) {
+  const ds = buildDataset(bytes, segments[segmentIndex]);
+  renderDashboard(ds);
+}
+
+let currentBytes = null;
+let currentSegments = null;
 
 el("fileInput").addEventListener("change", (e) => {
   const file = e.target.files[0];
@@ -112,12 +254,35 @@ el("fileInput").addEventListener("change", (e) => {
 
   const reader = new FileReader();
   reader.onload = () => {
-    const bytes = new Uint8Array(reader.result);
+    currentBytes = new Uint8Array(reader.result);
+    currentSegments = findLogSegments(currentBytes);
+
+    const segSelect = el("segmentSelect");
+    segSelect.innerHTML = "";
+    currentSegments.forEach((_, i) => {
+      const opt = document.createElement("option");
+      opt.value = i;
+      opt.textContent = `Flight segment ${i + 1} of ${currentSegments.length}`;
+      segSelect.appendChild(opt);
+    });
+    segSelect.style.display = currentSegments.length > 1 ? "inline-block" : "none";
+
     try {
-      analyzeLog(bytes);
+      loadSegment(currentBytes, currentSegments, 0);
     } catch (err) {
-      el("output").textContent = `Error while parsing: ${err}\n${err.stack ?? ""}`;
+      alert(`Error while parsing: ${err}`);
+      console.error(err);
     }
   };
   reader.readAsArrayBuffer(file);
+});
+
+el("segmentSelect").addEventListener("change", (e) => {
+  if (!currentBytes) return;
+  try {
+    loadSegment(currentBytes, currentSegments, Number(e.target.value));
+  } catch (err) {
+    alert(`Error while parsing: ${err}`);
+    console.error(err);
+  }
 });
