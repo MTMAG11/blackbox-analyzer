@@ -27,6 +27,15 @@ BBLUnits.gyroRawToDegreesPerSecond = function (sysConfig, value) {
   return ((sysConfig.gyroScale * 1000000) / (Math.PI / 180.0)) * value;
 };
 
+// baroAlt is logged in centimeters (raw/100 = meters) - confirmed from
+// upstream's field formatter (flightlog_fields_presenter.js "baroAlt"
+// case: `value / 100` passed straight through, no other calibration).
+// This is a barometric reading relative to wherever the FC zeroed itself
+// at boot, not an absolute or GPS altitude.
+BBLUnits.baroAltToMeters = function (value) {
+  return value / 100;
+};
+
 // Returns volts, or null if this firmware/version combo isn't one of the
 // branches we've ported (see file header).
 BBLUnits.vbatLatestToVolts = function (sysConfig, value) {

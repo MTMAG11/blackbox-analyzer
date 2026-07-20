@@ -61,6 +61,7 @@ function buildDataset(bytes, segment) {
   const pid = { P: [[], [], []], I: [[], [], []], D: [[], [], []], F: [[], [], []] };
   const setpoint = [[], [], []]; // roll, pitch, yaw - deg/s, already scaled in the log (BF >=4.0.0)
   const vbat = []; // volts if convertible, else raw
+  const baroAlt = []; // meters, relative to boot - not GPS, no absolute reference
   const motor = [[], [], [], []];
   const attRoll = [],
     attPitch = [],
@@ -73,6 +74,7 @@ function buildDataset(bytes, segment) {
   let hasGyroUnfilt = false;
   let hasQuat = false;
   let hasSetpoint = false;
+  let hasBaroAlt = false;
   let vbatIsVolts = false;
   let t0 = null;
   let lastKnownTime = null;
@@ -144,6 +146,10 @@ function buildDataset(bytes, segment) {
       motor[m].push(i !== undefined ? frame[i] : NaN);
     }
 
+    if (hasBaroAlt) {
+      baroAlt.push(BBLUnits.baroAltToMeters(frame[idx["baroAlt"]]));
+    }
+
     if (hasQuat) {
       const q = BBLUnits.normalizeQuaternion(
         frame[idx["imuQuaternion[0]"]],
@@ -171,6 +177,7 @@ function buildDataset(bytes, segment) {
     idx["imuQuaternion[1]"] !== undefined &&
     idx["imuQuaternion[2]"] !== undefined;
   hasSetpoint = idx["setpoint[0]"] !== undefined && idx["setpoint[1]"] !== undefined && idx["setpoint[2]"] !== undefined;
+  hasBaroAlt = idx["baroAlt"] !== undefined;
   vbatIsVolts = BBLUnits.vbatLatestToVolts(parser.sysConfig, 0) !== null;
 
   parser.parseLogData(false, undefined, segment.end);
@@ -189,6 +196,8 @@ function buildDataset(bytes, segment) {
     hasSetpoint,
     vbat,
     vbatIsVolts,
+    baroAlt,
+    hasBaroAlt,
     motor,
     hasQuat,
     attRoll,
@@ -221,21 +230,79 @@ function renderInfoPanel(ds) {
   el("gpsNote").classList.add("visible");
 }
 
-function renderDashboard(ds) {
-  BBLCharts.clearAll();
-  const chartsRoot = el("charts");
-  chartsRoot.innerHTML = "";
+/**
+ * Builds a tab bar + one panel per name, all appended to `container` in
+ * normal (visible) document flow - callers must populate every panel with
+ * its charts BEFORE calling activate(), not after. Charts measure their
+ * container's clientWidth at creation time, which reads as 0 inside a
+ * display:none ancestor (the same bug already fixed once for `main` -
+ * see the comment in renderDashboard), so panels stay visible during
+ * construction and only get hidden once everything inside them exists.
+ */
+function createTabs(container, tabNames) {
+  container.innerHTML = "";
+  const tabBar = document.createElement("div");
+  tabBar.className = "tab-bar";
+  const panelsWrap = document.createElement("div");
 
-  // Charts measure their container's clientWidth when created, which reads
-  // as 0 while an ancestor is display:none - so main must become visible
-  // BEFORE any chart is built, not after (that was the earlier bug causing
-  // every chart to fall back to a fixed 300px width in a full-width panel).
-  el("main").classList.add("visible");
+  const panels = {};
+  const buttons = {};
 
-  renderInfoPanel(ds);
+  const activate = (name) => {
+    tabNames.forEach((n) => {
+      const isActive = n === name;
+      panels[n].style.display = isActive ? "" : "none";
+      buttons[n].classList.toggle("active", isActive);
+    });
+  };
 
+  tabNames.forEach((name) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "tab-button";
+    btn.textContent = name;
+    btn.addEventListener("click", () => activate(name));
+    tabBar.appendChild(btn);
+    buttons[name] = btn;
+
+    const panel = document.createElement("div");
+    panel.className = "tab-panel";
+    panelsWrap.appendChild(panel);
+    panels[name] = panel;
+  });
+
+  container.appendChild(tabBar);
+  container.appendChild(panelsWrap);
+
+  return { panels, activate };
+}
+
+function renderOverviewTab(container, ds, crashFindings) {
+  const wrap = document.createElement("div");
+  wrap.className = "chart-panel";
+
+  const h = document.createElement("h3");
+  h.textContent = "At a Glance";
+  wrap.appendChild(h);
+
+  const highOrMedium = crashFindings.filter((f) => f.confidence === "high" || f.confidence === "medium");
+  const crashLine =
+    highOrMedium.length === 0
+      ? "No crash or anomaly indicators found - see the Crash Detection tab for detail."
+      : `${highOrMedium.length} possible issue(s) flagged - see the Crash Detection tab for detail.`;
+
+  const p = document.createElement("p");
+  p.className = "diagram-note";
+  p.style.fontSize = "0.85rem";
+  p.innerHTML = `This flight lasted <b>${fmtDuration(ds.t.length ? ds.t[ds.t.length - 1] : 0)}</b>. ${crashLine} Use the tabs above for the full charts - this page is just a quick summary.`;
+  wrap.appendChild(p);
+
+  container.appendChild(wrap);
+}
+
+function renderFlightReplayTab(container, ds) {
   // 1. Stick & throttle inputs
-  BBLCharts.createLineChart(chartsRoot, "Stick & Throttle Inputs (raw rcCommand)", ds.t, [
+  BBLCharts.createLineChart(container, "Stick & Throttle Inputs (raw rcCommand)", ds.t, [
     { label: "Roll", slot: 1, data: ds.stick[0] },
     { label: "Pitch", slot: 2, data: ds.stick[1] },
     { label: "Yaw", slot: 3, data: ds.stick[2] },
@@ -249,7 +316,7 @@ function renderDashboard(ds) {
     if (ds.hasGyroUnfilt) {
       seriesDefs.push({ label: `${axisNames[axis]} (unfiltered)`, slot: axis + 1, data: ds.gyroUnfilt[axis], dashed: true });
     }
-    BBLCharts.createLineChart(chartsRoot, `Gyro ${axisNames[axis]} (deg/s)`, ds.t, seriesDefs);
+    BBLCharts.createLineChart(container, `Gyro ${axisNames[axis]} (deg/s)`, ds.t, seriesDefs);
   }
 
   // 3. PID terms, one chart per axis
@@ -261,12 +328,12 @@ function renderDashboard(ds) {
         seriesDefs.push({ label: term, slot: pidSlots[term], data: ds.pid[term][axis] });
       }
     }
-    BBLCharts.createLineChart(chartsRoot, `${axisNames[axis]} PID Terms (raw)`, ds.t, seriesDefs);
+    BBLCharts.createLineChart(container, `${axisNames[axis]} PID Terms (raw)`, ds.t, seriesDefs);
   }
 
   // 4. Battery voltage
   BBLCharts.createLineChart(
-    chartsRoot,
+    container,
     ds.vbatIsVolts ? "Battery Voltage (V)" : "Battery (raw units)",
     ds.t,
     [{ label: "vbat", slot: 1, data: ds.vbat }],
@@ -274,8 +341,8 @@ function renderDashboard(ds) {
 
   // 5. Motor outputs (labeled 1-4 to match Betaflight's own motor numbering,
   // even though the log field names and ds.motor[] are 0-indexed internally)
-  renderMotorLayoutDiagram(chartsRoot);
-  BBLCharts.createLineChart(chartsRoot, "Motor Outputs (raw)", ds.t, [
+  renderMotorLayoutDiagram(container);
+  BBLCharts.createLineChart(container, "Motor Outputs (raw)", ds.t, [
     { label: "Motor 1", slot: 1, data: ds.motor[0] },
     { label: "Motor 2", slot: 2, data: ds.motor[1] },
     { label: "Motor 3", slot: 3, data: ds.motor[2] },
@@ -286,37 +353,77 @@ function renderDashboard(ds) {
   if (ds.hasQuat) {
     // Heading is stored as 0-360deg; unwrap just for the chart so a normal
     // rotation through north doesn't draw as a fake vertical spike.
-    BBLCharts.createLineChart(chartsRoot, "Attitude - orientation only, not position (deg)", ds.t, [
+    BBLCharts.createLineChart(container, "Attitude - orientation only, not position (deg)", ds.t, [
       { label: "Roll", slot: 1, data: ds.attRoll },
       { label: "Pitch", slot: 2, data: ds.attPitch },
       { label: "Heading", slot: 3, data: unwrapDegrees(ds.attHeading) },
     ]);
   }
 
-  // 7. Vibration spectrum (gyroUnfilt only - filtered gyro has already had
+  // 7. Altitude (barometer, relative to boot - not GPS, no absolute reference)
+  if (ds.hasBaroAlt) {
+    BBLCharts.createLineChart(container, "Altitude - barometer, relative to boot, not GPS (m)", ds.t, [
+      { label: "Altitude", slot: 1, data: ds.baroAlt },
+    ]);
+  }
+}
+
+function renderDashboard(ds) {
+  BBLCharts.clearAll();
+  const chartsRoot = el("charts");
+  chartsRoot.innerHTML = "";
+
+  // Charts measure their container's clientWidth when created, which reads
+  // as 0 while an ancestor is display:none - so main must become visible
+  // BEFORE any chart is built, not after (that was the earlier bug causing
+  // every chart to fall back to a fixed 300px width in a full-width panel).
+  el("main").classList.add("visible");
+
+  renderInfoPanel(ds);
+
+  const crashFindings = BBLCrashDetect.analyze(ds);
+
+  const tabNames = ["Overview", "Flight Replay", "Vibration", "PID Tuning", "Crash Detection", "3D Attitude", "Flight Metrics"];
+  const { panels, activate } = createTabs(chartsRoot, tabNames);
+
+  renderOverviewTab(panels["Overview"], ds, crashFindings);
+  renderFlightReplayTab(panels["Flight Replay"], ds);
+
+  // Vibration spectrum (gyroUnfilt only - filtered gyro has already had
   // this content suppressed by the FC's own filters)
   if (ds.hasGyroUnfilt) {
-    renderSpectrumSection(chartsRoot, ds);
+    renderSpectrumSection(panels["Vibration"], ds);
+  } else {
+    panels["Vibration"].innerHTML = '<p class="diagram-note">No unfiltered gyro data in this log.</p>';
   }
 
-  // 8. PID tuning: gyro-vs-setpoint tracking error and step-response symptoms
+  // PID tuning: gyro-vs-setpoint tracking error and step-response symptoms
   if (ds.hasSetpoint) {
-    renderPidAnalysisSection(chartsRoot, ds);
+    renderPidAnalysisSection(panels["PID Tuning"], ds);
+  } else {
+    panels["PID Tuning"].innerHTML = '<p class="diagram-note">No setpoint data in this log.</p>';
   }
 
-  // 9. Crash / anomaly detection: ranked possibilities, never a diagnosis
-  renderCrashSection(chartsRoot, ds);
+  // Crash / anomaly detection: ranked possibilities, never a diagnosis
+  renderCrashSection(panels["Crash Detection"], ds, crashFindings);
 
-  // 10. 3D attitude reconstruction (orientation only - no GPS, no position/path)
+  // 3D attitude reconstruction (orientation only - no GPS, no position/path)
   if (ds.hasQuat) {
-    renderAttitude3DSection(chartsRoot, ds);
+    renderAttitude3DSection(panels["3D Attitude"], ds);
+  } else {
+    panels["3D Attitude"].innerHTML = '<p class="diagram-note">No imuQuaternion data in this log.</p>';
   }
 
-  // 11. Flight metrics (exploratory) - objective numbers only, never a
+  // Flight metrics (exploratory) - objective numbers only, never a
   // subjective "good/bad flying" rating (no labeled ground truth for that)
   if (ds.hasSetpoint) {
-    renderFlightCoachSection(chartsRoot, ds);
+    renderFlightCoachSection(panels["Flight Metrics"], ds);
+  } else {
+    panels["Flight Metrics"].innerHTML = '<p class="diagram-note">No setpoint data in this log.</p>';
   }
+
+  // Every panel is fully built now - safe to hide all but the first.
+  activate(tabNames[0]);
 }
 
 function confidenceBadgeHtml(confidence) {
@@ -324,7 +431,7 @@ function confidenceBadgeHtml(confidence) {
   return `<span class="finding-badge ${confidence}">${labels[confidence] ?? confidence}</span>`;
 }
 
-function renderCrashSection(chartsRoot, ds) {
+function renderCrashSection(chartsRoot, ds, findings) {
   const wrap = document.createElement("div");
   wrap.className = "chart-panel";
 
@@ -337,8 +444,6 @@ function renderCrashSection(chartsRoot, ds) {
   note.textContent =
     "Ranked possibilities, not a diagnosis. “High confidence” only applies to Betaflight's own onboard crash/runaway detection reporting itself via the disarm reason - everything else is a heuristic that can have false positives. Motor “desync” specifically isn't detected: this log has no RPM/eRPM telemetry, so there's no reliable way to tell commanded motor output apart from an actual mechanical failure.";
   wrap.appendChild(note);
-
-  const findings = BBLCrashDetect.analyze(ds);
 
   const list = document.createElement("ul");
   list.className = "finding-list";
@@ -429,12 +534,6 @@ function renderFlightCoachSection(chartsRoot, ds) {
 }
 
 function renderPidAnalysisSection(chartsRoot, ds) {
-  const heading = document.createElement("h2");
-  heading.textContent = "PID Tracking (setpoint vs gyro)";
-  heading.style.fontSize = "0.95rem";
-  heading.style.margin = "1.5rem 0 0.25rem";
-  chartsRoot.appendChild(heading);
-
   const note = document.createElement("p");
   note.className = "subtitle";
   note.style.margin = "0 0 0.75rem";
@@ -529,12 +628,6 @@ function renderMotorLayoutDiagram(container) {
 }
 
 function renderSpectrumSection(chartsRoot, ds) {
-  const heading = document.createElement("h2");
-  heading.textContent = "Vibration Spectrum (unfiltered gyro)";
-  heading.style.fontSize = "0.95rem";
-  heading.style.margin = "1.5rem 0 0.25rem";
-  chartsRoot.appendChild(heading);
-
   const note = document.createElement("p");
   note.className = "subtitle";
   note.style.margin = "0 0 0.75rem";
@@ -678,25 +771,9 @@ el("fileInput").addEventListener("change", (e) => {
 
   const reader = new FileReader();
   reader.onload = () => {
-    currentBytes = new Uint8Array(reader.result);
-    currentSegments = findLogSegments(currentBytes);
-
-    const segSelect = el("segmentSelect");
-    segSelect.innerHTML = "";
-    currentSegments.forEach((_, i) => {
-      const opt = document.createElement("option");
-      opt.value = i;
-      opt.textContent = `Flight segment ${i + 1} of ${currentSegments.length}`;
-      segSelect.appendChild(opt);
-    });
-    segSelect.style.display = currentSegments.length > 1 ? "inline-block" : "none";
-
-    try {
-      loadSegment(currentBytes, currentSegments, 0);
-    } catch (err) {
-      alert(`Error while parsing: ${err}`);
-      console.error(err);
-    }
+    const bytes = new Uint8Array(reader.result);
+    const segments = findLogSegments(bytes);
+    loadIntoMainDashboard(bytes, segments, 0);
   };
   reader.readAsArrayBuffer(file);
 });
@@ -709,4 +786,121 @@ el("segmentSelect").addEventListener("change", (e) => {
     alert(`Error while parsing: ${err}`);
     console.error(err);
   }
+});
+
+function loadIntoMainDashboard(bytes, segments, segmentIndex) {
+  currentBytes = bytes;
+  currentSegments = segments;
+
+  const segSelect = el("segmentSelect");
+  segSelect.innerHTML = "";
+  segments.forEach((_, i) => {
+    const opt = document.createElement("option");
+    opt.value = i;
+    opt.textContent = `Flight segment ${i + 1} of ${segments.length}`;
+    segSelect.appendChild(opt);
+  });
+  segSelect.style.display = segments.length > 1 ? "inline-block" : "none";
+  segSelect.value = segmentIndex;
+
+  el("placeholder").style.display = "none";
+
+  try {
+    loadSegment(bytes, segments, segmentIndex);
+  } catch (err) {
+    alert(`Error while parsing: ${err}`);
+    console.error(err);
+  }
+}
+
+function renderBatchResults(rows) {
+  const container = el("batchResults");
+  if (rows.length === 0) {
+    container.innerHTML = '<p class="diagram-note">No files scanned yet.</p>';
+    return;
+  }
+
+  const table = document.createElement("table");
+  table.className = "batch-table";
+  table.innerHTML = "<thead><tr><th>File</th><th>Segment</th><th>Duration</th><th>Throttle range</th><th>Verdict</th></tr></thead>";
+  const tbody = document.createElement("tbody");
+
+  rows.forEach((row) => {
+    const tr = document.createElement("tr");
+    const canLoad = row.bytes !== null;
+    if (canLoad) tr.className = "clickable";
+
+    const durationText = row.scan.durationSec ? `${row.scan.durationSec.toFixed(1)}s` : "n/a";
+    const throttleText = row.scan.throttleRange !== null && row.scan.throttleRange !== undefined ? row.scan.throttleRange.toFixed(0) : "n/a";
+
+    tr.innerHTML = `
+      <td>${row.fileName}</td>
+      <td>${row.segmentLabel}</td>
+      <td>${durationText}</td>
+      <td>${throttleText}</td>
+      <td><span class="batch-verdict ${row.classification.likelyFlight ? "yes" : "no"}" title="${row.classification.reason}">${row.classification.likelyFlight ? "Likely flight" : "Probably not"}</span></td>
+    `;
+
+    if (canLoad) {
+      tr.addEventListener("click", () => {
+        loadIntoMainDashboard(row.bytes, row.segments, row.segmentIndex);
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      });
+    }
+    tbody.appendChild(tr);
+  });
+
+  table.appendChild(tbody);
+  container.innerHTML = "";
+  container.appendChild(table);
+}
+
+el("batchInput").addEventListener("change", (e) => {
+  const files = Array.from(e.target.files || []);
+  if (files.length === 0) return;
+
+  el("batchResults").innerHTML = '<p class="diagram-note">Scanning...</p>';
+
+  const rows = [];
+  let pending = files.length;
+
+  files.forEach((file) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const bytes = new Uint8Array(reader.result);
+        const segments = findLogSegments(bytes);
+        segments.forEach((segment, segmentIndex) => {
+          const scan = BBLBatchScan.quickScanLog(bytes, segment);
+          const classification = BBLBatchScan.classifyFlight(scan);
+          rows.push({
+            fileName: file.name,
+            segmentLabel: segments.length > 1 ? `${segmentIndex + 1} of ${segments.length}` : "1 of 1",
+            segmentIndex,
+            scan,
+            classification,
+            bytes,
+            segments,
+          });
+        });
+      } catch (err) {
+        rows.push({
+          fileName: file.name,
+          segmentLabel: "-",
+          segmentIndex: 0,
+          scan: { durationSec: 0, throttleRange: null },
+          classification: { likelyFlight: false, reason: `Failed to parse: ${err}` },
+          bytes: null,
+          segments: null,
+        });
+      }
+
+      pending--;
+      if (pending === 0) {
+        rows.sort((a, b) => (a.fileName < b.fileName ? -1 : a.fileName > b.fileName ? 1 : a.segmentIndex - b.segmentIndex));
+        renderBatchResults(rows);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  });
 });

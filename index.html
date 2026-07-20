@@ -23,6 +23,7 @@
        reused as a series color. */
     --status-critical: #d03b3b;
     --status-warning: #fab219;
+    --status-good: #0ca30c;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -74,8 +75,30 @@
     display: none;
   }
   .gps-note.visible { display: block; }
+  .batch-panel {
+    margin: 0 1.5rem 0.75rem; padding: 0.6rem 1rem;
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+  }
+  .batch-panel summary { cursor: pointer; font-size: 0.85rem; color: var(--text-primary); font-weight: 600; }
+  .batch-panel-body { padding-top: 0.6rem; }
+  .batch-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-top: 0.5rem; }
+  .batch-table th, .batch-table td { text-align: left; padding: 0.4rem 0.6rem; border-top: 1px solid var(--border); }
+  .batch-table th { color: var(--text-muted); font-weight: 600; font-size: 0.72rem; text-transform: uppercase; }
+  .batch-table tr.clickable { cursor: pointer; }
+  .batch-table tr.clickable:hover { background: var(--page); }
+  .batch-verdict { font-size: 0.68rem; font-weight: 700; padding: 0.15rem 0.45rem; border-radius: 4px; text-transform: uppercase; white-space: nowrap; }
+  .batch-verdict.yes { background: var(--status-good); color: #fff; }
+  .batch-verdict.no { background: transparent; color: var(--text-muted); border: 1px solid var(--border); }
   main { padding: 0 1.5rem 2rem; display: none; }
   main.visible { display: block; }
+  .tab-bar { display: flex; gap: 0.25rem; flex-wrap: wrap; border-bottom: 1px solid var(--border); margin-bottom: 1rem; }
+  .tab-button {
+    font: inherit; font-size: 0.82rem; background: transparent; color: var(--text-secondary);
+    border: none; border-bottom: 2px solid transparent; padding: 0.5rem 0.8rem; cursor: pointer;
+  }
+  .tab-button:hover { color: var(--text-primary); }
+  .tab-button.active { color: var(--text-primary); border-bottom-color: var(--series-1); font-weight: 600; }
+  .tab-panel { }
   .chart-panel {
     background: var(--surface-1); border: 1px solid var(--border);
     border-radius: 8px; padding: 0.75rem 1rem 0.25rem; margin-bottom: 1rem;
@@ -198,6 +221,15 @@
   <select id="segmentSelect" style="display:none;"></select>
 </div>
 
+<details class="batch-panel">
+  <summary>Screen multiple logs (find which ones look like real flights)</summary>
+  <div class="batch-panel-body">
+    <input type="file" id="batchInput" accept=".bbl,.bfl" multiple>
+    <p class="diagram-note" style="margin:0.5rem 0 0;">Scans every segment in every file you pick (duration + throttle stick range only, not the full charts) and flags which ones look like real flights vs. a bench test or a brief arm/disarm. Heuristic, not certain - click a row to load it into the dashboard above regardless of the verdict.</p>
+    <div id="batchResults"></div>
+  </div>
+</details>
+
 <div class="info-panel" id="infoPanel"></div>
 <div class="gps-note" id="gpsNote">Orientation shown, not position &mdash; no GPS in this log.</div>
 
@@ -213,6 +245,7 @@
 <script src="src/decoders.js"></script>
 <script src="src/decoder.js"></script>
 <script src="src/units.js"></script>
+<script src="src/batchscan.js"></script>
 <script src="src/fft.js"></script>
 <script src="src/pidanalysis.js"></script>
 <script src="src/flightcoach.js"></script>
@@ -220,10 +253,5 @@
 <script src="src/attitude3d.js"></script>
 <script src="src/charts.js"></script>
 <script src="src/app.js"></script>
-<script>
-  el("fileInput").addEventListener("change", () => {
-    el("placeholder").style.display = "none";
-  });
-</script>
 </body>
 </html>

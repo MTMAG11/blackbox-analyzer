@@ -67,7 +67,15 @@ you don't need prior conversation history.
   the hand trace exactly; full pipeline also run against the real sample
   log - see "Phase 6 details" below), but not yet manually confirmed by
   the owner in their own browser.
-- [ ] Phase 7 — Integrated Platform: not started, not designed.
+- [x] **Phase 7 — Integrated Platform**: DONE, but not the way the
+  original brief framed it. The brief said don't design this upfront on
+  guesses - phases 1-6 already shared one unified dashboard (single file
+  picker, one page, consistent theming), so there was no obvious
+  "integration" gap to fill without guessing. Asked the owner directly
+  what integration meant to them from actually using it; they wanted
+  three concrete things, all built: an altitude chart, batch upload with
+  automatic flight/non-flight classification, and a tabbed layout
+  (previously one long scroll of 20 charts). See "Phase 7 details" below.
 
 ## Decoder verification (Phase 0)
 
@@ -467,6 +475,64 @@ step responses already covered in Phase 3.
   detection was implicitly checked by looking sane against the stick
   chart.
 
+## Phase 7 details
+
+Three additions, all directly requested by the owner rather than
+speculatively designed:
+
+1. **Altitude chart** (`baroAlt` field, in the Flight Replay tab).
+   Confirmed the unit conversion from the real upstream source
+   (`flightlog_fields_presenter.js`'s `baroAlt` case: raw value / 100 =
+   meters, no other calibration) before trusting it, same pattern as
+   every other unit conversion in this project. Labeled clearly as
+   barometer-relative-to-boot, not GPS, no absolute reference - this
+   project still has no GPS and never will for this hardware. Cross-
+   validated against the real log: shows a climb to ~25m in the exact
+   t=65-70s window where the motor/stick charts already showed a hard
+   throttle punch - the new data agrees with data already known to be
+   correct, a good sign.
+2. **Batch upload + flight classification** (`src/batchscan.js`,
+   collapsible panel above the main file picker). `quickScanLog()` is a
+   lightweight pass (duration + throttle stick range only, not the full
+   converted dataset `buildDataset()` builds) so screening many files
+   stays fast. `classifyFlight()` is a heuristic (duration >=3s AND
+   throttle stick range >=150) - explicitly presented as a heuristic in
+   the UI (reason text on every verdict), not a certainty. Handles parse
+   failures per-file without aborting the whole batch (tested with a
+   deliberately corrupt file alongside the real sample log - the corrupt
+   one failed gracefully with its actual error message shown, the real
+   one classified correctly). Clicking any successfully-parsed row loads
+   it into the main dashboard.
+3. **Tabbed layout** (Overview / Flight Replay / Vibration / PID Tuning /
+   Crash Detection / 3D Attitude / Flight Metrics, `createTabs()` in
+   `app.js`). Replaces one long scroll of 20 charts. Overview is new: a
+   short at-a-glance summary (duration + crash-detection status) for
+   someone who just wants to check nothing's wrong without digging
+   through every tab. **Important implementation detail**: all tab panels
+   are built while genuinely visible (normal document flow), and only
+   hidden with `display:none` *after* every chart in every panel has been
+   created - this is the same fix already applied once to `main` (see
+   the Phase 2 UI fixes above) for the same underlying reason: uPlot
+   charts measure their container's `clientWidth` at creation time, which
+   reads as 0 inside a `display:none` ancestor. Building hidden-then-
+   showing would have reintroduced that exact bug for every tab except
+   the first. Verified: charts in non-default tabs (e.g. Flight Replay)
+   render at full width, not a fixed fallback size.
+
+### Confidence notes (Phase 7)
+
+- The batch classifier's thresholds (3s minimum duration, 150 minimum
+  throttle-stick range) are reasonable first-pass values, not tuned
+  against a labeled set of known-flight vs. known-non-flight logs (none
+  was available - this project has exactly one sample log). If the owner
+  runs this against their actual SD card archive and finds obvious
+  misclassifications, that's useful signal to retune the thresholds, not
+  a sign anything is broken.
+- Everything else in this phase (altitude units, tab-visibility ordering)
+  is either a direct port verified against source, or a straightforward
+  application of an already-established pattern from earlier phases -
+  low risk, high confidence.
+
 ## Decoder architecture & licensing (important — read before touching src/)
 
 `src/tools.js`, `src/datastream.js`, `src/decoders.js`, `src/decoder.js`,
@@ -494,8 +560,8 @@ exactly what was changed in the port. Summary of changes:
 
 `src/charts.js`, `src/fft.js`, `src/pidanalysis.js`, `src/flightcoach.js`,
 `src/crashdetect.js` (except `DISARM_REASON_NAMES`, transcribed from
-upstream), `src/attitude3d.js`, and `src/app.js` are original code (not
-ported), written for this project.
+upstream), `src/attitude3d.js`, `src/batchscan.js`, and `src/app.js` are
+original code (not ported), written for this project.
 
 **Licensing consequence**: because this repo incorporates GPL-3.0 code,
 the whole repo is licensed GPL-3.0 (see `LICENSE` at repo root and
@@ -515,11 +581,12 @@ project with no commercial angle, GPL-3.0 has no practical downside.
   units.js          unit conversion formulas (ported, trimmed - see above)
   fft.js            FFT + vibration spectrum analysis (original, self-tested)
   pidanalysis.js    step-response symptom detection (original, self-tested)
+  batchscan.js      lightweight multi-file scan + flight classifier (original, self-tested)
   flightcoach.js    exploratory objective flight metrics (original, self-tested)
   crashdetect.js    crash/anomaly detectors (original, self-tested)
   attitude3d.js     3D rotation matrix + playback controller (original, self-tested)
   charts.js         uPlot chart-creation helper (original)
-  app.js            dataset builder + dashboard orchestration (original)
+  app.js            dataset builder + dashboard orchestration, tab UI (original)
 /logs/              Sample .bbl files (safe, no location data)
   btfl_007.bbl      Real sample log, used for decoder verification
 /docs/              This file
@@ -528,16 +595,20 @@ NOTICE.md           Attribution details for the ported code
 ```
 
 Load order in `index.html` matters: uPlot CDN -> tools.js -> datastream.js
--> decoders.js -> decoder.js -> units.js -> fft.js -> pidanalysis.js ->
-flightcoach.js -> crashdetect.js -> attitude3d.js -> charts.js -> app.js
-(each later file depends on globals defined by the ones before it;
-flightcoach.js specifically needs pidanalysis.js loaded first for
-BBLPidAnalysis.computeError/detectStepEvents).
+-> decoders.js -> decoder.js -> units.js -> batchscan.js -> fft.js ->
+pidanalysis.js -> flightcoach.js -> crashdetect.js -> attitude3d.js ->
+charts.js -> app.js (each later file depends on globals defined by the
+ones before it; flightcoach.js specifically needs pidanalysis.js loaded
+first for BBLPidAnalysis.computeError/detectStepEvents).
 
 ## Open issues / things to know for next session
 
-- **Phase 6 needs the owner's manual confirmation** in their own browser
-  (only self-tested/verified programmatically this session).
+- **Phase 6 and Phase 7 need the owner's manual confirmation** in their
+  own browser (only self-tested/verified programmatically this session).
+  For Phase 7 specifically: try the batch upload with a real folder of
+  logs (not just the one sample file) to see if the flight/non-flight
+  classification thresholds hold up, and check the tabbed layout feels
+  right for casual use.
 - **The in-session preview browser used for testing was briefly
   unresponsive this session** (multiple fresh tabs failed to load the
   local file) - recovered on its own after several attempts, including
