@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>FPV Blackbox Analysis - Phase 0 Decoder Test</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 2rem; background: #111; color: #eee; }
+  h1 { font-size: 1.2rem; }
+  #output { white-space: pre-wrap; font-family: Consolas, monospace; font-size: 0.85rem;
+            background: #000; padding: 1rem; border-radius: 6px; margin-top: 1rem; min-height: 200px; }
+  input[type=file] { margin-top: 1rem; }
+</style>
+</head>
+<body>
+<h1>FPV Blackbox Analysis Platform &mdash; Phase 0: Decoder Verification</h1>
+<p>This page is a bare-bones test harness. It is not the real dashboard &mdash;
+it just proves the .bbl decoder correctly parses a real log file before we
+build charts on top of it.</p>
+
+<input type="file" id="fileInput" accept=".bbl,.bfl,.csv">
+
+<div id="output">Choose a .bbl file above to decode it.</div>
+
+<script src="src/tools.js"></script>
+<script src="src/datastream.js"></script>
+<script src="src/decoders.js"></script>
+<script src="src/decoder.js"></script>
+<script src="src/app.js"></script>
+</body>
+</html>
