@@ -52,15 +52,15 @@ BBLUnits.amperageLatestToAmps = function (sysConfig, value) {
 
 /**
  * Convert the 3 logged imuQuaternion components (x, y, z; fixed-point
- * int16 scaled by 0x7FFF) into roll/pitch/heading in degrees.
+ * int16 scaled by 0x7FFF) into a normalized unit quaternion {x,y,z,w}.
  *
  * Betaflight only logs x/y/z, not w - w is reconstructed from the unit
  * quaternion constraint (x^2+y^2+z^2+w^2=1), which is exactly what
- * upstream's computeAttitude() does.
- *
- * Returns {rollDeg, pitchDeg, headingDeg}.
+ * upstream's computeAttitude() does. Shared by quaternionToEulerDegrees()
+ * (Phase 1) and attitude3d.js's 3D rotation matrix (Phase 5) so both use
+ * the exact same reconstructed quaternion.
  */
-BBLUnits.quaternionToEulerDegrees = function (rawX, rawY, rawZ) {
+BBLUnits.normalizeQuaternion = function (rawX, rawY, rawZ) {
   const scale = 0x7fff;
   const q = { x: rawX / scale, y: rawY / scale, z: rawZ / scale, w: 1.0 };
 
@@ -75,6 +75,16 @@ BBLUnits.quaternionToEulerDegrees = function (rawX, rawY, rawZ) {
     q.w = 0;
   }
 
+  return q;
+};
+
+/**
+ * Roll/pitch/heading in degrees from an already-normalized quaternion
+ * {x,y,z,w}. Split out from quaternionToEulerDegrees() so callers that
+ * already have a normalized q (e.g. app.js storing it for the Phase 5 3D
+ * model) don't need to re-normalize.
+ */
+BBLUnits.eulerDegreesFromNormalizedQuaternion = function (q) {
   const xx = q.x ** 2,
     xy = q.x * q.y,
     xz = q.x * q.z,
@@ -96,4 +106,12 @@ BBLUnits.quaternionToEulerDegrees = function (rawX, rawY, rawZ) {
     pitchDeg: pitch * toDeg,
     headingDeg: heading * toDeg,
   };
+};
+
+/**
+ * Convenience wrapper for callers that only have the raw logged values.
+ * Returns {rollDeg, pitchDeg, headingDeg}.
+ */
+BBLUnits.quaternionToEulerDegrees = function (rawX, rawY, rawZ) {
+  return BBLUnits.eulerDegreesFromNormalizedQuaternion(BBLUnits.normalizeQuaternion(rawX, rawY, rawZ));
 };

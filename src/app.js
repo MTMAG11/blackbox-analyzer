@@ -65,6 +65,7 @@ function buildDataset(bytes, segment) {
   const attRoll = [],
     attPitch = [],
     attHeading = [];
+  const attQuat = { x: [], y: [], z: [], w: [] }; // normalized quaternion, for Phase 5's 3D model
   const frameCount = { I: 0, P: 0, S: 0, E: 0 };
   const disarmEvents = []; // [{ timeSec, reason }]
 
@@ -144,11 +145,17 @@ function buildDataset(bytes, segment) {
     }
 
     if (hasQuat) {
-      const att = BBLUnits.quaternionToEulerDegrees(
+      const q = BBLUnits.normalizeQuaternion(
         frame[idx["imuQuaternion[0]"]],
         frame[idx["imuQuaternion[1]"]],
         frame[idx["imuQuaternion[2]"]],
       );
+      attQuat.x.push(q.x);
+      attQuat.y.push(q.y);
+      attQuat.z.push(q.z);
+      attQuat.w.push(q.w);
+
+      const att = BBLUnits.eulerDegreesFromNormalizedQuaternion(q);
       attRoll.push(att.rollDeg);
       attPitch.push(att.pitchDeg);
       attHeading.push(att.headingDeg);
@@ -187,6 +194,7 @@ function buildDataset(bytes, segment) {
     attRoll,
     attPitch,
     attHeading,
+    attQuat,
     disarmEvents,
   };
 }
@@ -298,6 +306,11 @@ function renderDashboard(ds) {
 
   // 9. Crash / anomaly detection: ranked possibilities, never a diagnosis
   renderCrashSection(chartsRoot, ds);
+
+  // 10. 3D attitude reconstruction (orientation only - no GPS, no position/path)
+  if (ds.hasQuat) {
+    renderAttitude3DSection(chartsRoot, ds);
+  }
 }
 
 function confidenceBadgeHtml(confidence) {
@@ -479,6 +492,91 @@ function renderSpectrumSection(chartsRoot, ds) {
       { xLabel: "frequency (Hz)", syncKey: "bbl-sync-freq", footerHtml: peaksFooterHtml(peaks) },
     );
   }
+}
+
+/**
+ * 3D drone model driven directly by the recorded quaternion (not by the
+ * Euler angles from the chart above, to avoid gimbal-lock artifacts near
+ * +-90deg pitch). Local body frame: +X = forward (this is the axis
+ * BBLAttitude3D.selfTest() confirmed matches BBLUnits' roll exactly, so
+ * it's the roll/longitudinal axis), +Y = right, Z = up out of the local
+ * X-Y plane. Motor local positions match the Phase 2 top-down diagram's
+ * numbering (1=rear right, 2=front right, 3=rear left, 4=front left).
+ */
+function renderAttitude3DSection(chartsRoot, ds) {
+  const wrap = document.createElement("div");
+  wrap.className = "chart-panel";
+
+  const h = document.createElement("h3");
+  h.textContent = "Attitude Reconstruction (3D, orientation only)";
+  wrap.appendChild(h);
+
+  const note = document.createElement("p");
+  note.className = "diagram-note";
+  note.textContent =
+    "Orientation shown, not position - no GPS in this log. The rotation math is self-tested and matches the Attitude chart above exactly, but the specific 3D visual mapping (which screen direction is \"forward\") hasn't been checked against real footage of this flight, since none exists to check against - treat the shape as a rough guide to attitude, not a precise replay.";
+  wrap.appendChild(note);
+
+  const armStyle = "width:65px;height:3px;background:var(--axis);transform-origin:0 50%;";
+  const scene = document.createElement("div");
+  scene.className = "attitude3d-wrap";
+  scene.innerHTML = `
+    <div class="attitude3d-scene">
+      <div class="attitude3d-camera">
+        <div class="attitude3d-drone" id="attitude3dDrone">
+          <div class="d3-arm" style="${armStyle}transform:rotate3d(0,0,1,135deg);"></div>
+          <div class="d3-arm" style="${armStyle}transform:rotate3d(0,0,1,45deg);"></div>
+          <div class="d3-arm" style="${armStyle}transform:rotate3d(0,0,1,-135deg);"></div>
+          <div class="d3-arm" style="${armStyle}transform:rotate3d(0,0,1,-45deg);"></div>
+          <div class="d3-motor" style="background:var(--series-1);transform:translate3d(-46px,46px,0);">1</div>
+          <div class="d3-motor" style="background:var(--series-2);transform:translate3d(46px,46px,0);">2</div>
+          <div class="d3-motor" style="background:var(--series-3);transform:translate3d(-46px,-46px,0);">3</div>
+          <div class="d3-motor" style="background:var(--series-4);transform:translate3d(46px,-46px,0);">4</div>
+          <div class="d3-nose" style="transform:translate3d(72px,0,0) rotate3d(0,0,1,90deg);"></div>
+          <div class="d3-hub"></div>
+        </div>
+      </div>
+    </div>
+    <div class="attitude3d-controls">
+      <button type="button" id="attitude3dPlay">Play</button>
+      <input type="range" id="attitude3dSeek" min="0" max="${Math.max(ds.t.length - 1, 0)}" value="0" step="1">
+    </div>
+    <div class="attitude3d-readout" id="attitude3dReadout"></div>
+  `;
+  wrap.appendChild(scene);
+  chartsRoot.appendChild(wrap);
+
+  const droneEl = scene.querySelector("#attitude3dDrone");
+  const playBtn = scene.querySelector("#attitude3dPlay");
+  const seekEl = scene.querySelector("#attitude3dSeek");
+  const readoutEl = scene.querySelector("#attitude3dReadout");
+
+  const applyFrame = (i) => {
+    const q = { x: ds.attQuat.x[i], y: ds.attQuat.y[i], z: ds.attQuat.z[i], w: ds.attQuat.w[i] };
+    droneEl.style.transform = BBLAttitude3D.quaternionToCssMatrix3d(q);
+    seekEl.value = i;
+    readoutEl.textContent = `t=${ds.t[i].toFixed(1)}s   roll=${ds.attRoll[i].toFixed(0)}°   pitch=${ds.attPitch[i].toFixed(0)}°   heading=${ds.attHeading[i].toFixed(0)}°`;
+  };
+
+  const player = BBLAttitude3D.createPlayer(ds.t, applyFrame, { rate: 1 });
+
+  playBtn.addEventListener("click", () => {
+    if (player.isPlaying()) {
+      player.pause();
+      playBtn.textContent = "Play";
+    } else {
+      player.play();
+      playBtn.textContent = "Pause";
+    }
+  });
+
+  seekEl.addEventListener("input", () => {
+    player.pause();
+    playBtn.textContent = "Play";
+    player.seekToIndex(Number(seekEl.value));
+  });
+
+  if (ds.t.length > 0) applyFrame(0);
 }
 
 function loadSegment(bytes, segments, segmentIndex) {

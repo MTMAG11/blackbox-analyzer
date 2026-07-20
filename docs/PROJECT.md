@@ -44,14 +44,19 @@ you don't need prior conversation history.
   underdamped 2nd-order response with analytically known overshoot % and
   settling time; owner confirmed it looks right in their own browser
   against the real sample log. See "Phase 3 details" below.
-- [x] **Phase 4 — Automatic Crash Detector**: built and self-verified
-  (detectors validated via `BBLCrashDetect.selfTest()` against synthetic
-  data with known spike/dropout events; full pipeline also run against
-  the real sample log - correctly found zero false positives on what was
-  a normal flight, just one "SWITCH" disarm classified as informational,
-  not concerning - see "Phase 4 details" below), but not yet manually
-  confirmed by the owner in their own browser.
-- [ ] Phase 5 — Attitude Reconstruction: not started.
+- [x] **Phase 4 — Automatic Crash Detector**: DONE. Detectors validated
+  via `BBLCrashDetect.selfTest()` against synthetic data with known
+  spike/dropout events; owner confirmed it looks right in their own
+  browser against the real sample log (correctly zero false positives -
+  see "Phase 4 details" below).
+- [x] **Phase 5 — Attitude Reconstruction**: built and self-verified (3D
+  rotation matrix validated via `BBLAttitude3D.selfTest()` against the
+  already-trusted Phase 1 Euler formula for 5 test quaternions - roll and
+  pitch match exactly, heading matches up to Betaflight's own known sign
+  convention; play/pause/scrub controls exercised against the real log
+  and correctly reached the exact known flight duration - see "Phase 5
+  details" below), but not yet manually confirmed by the owner in their
+  own browser.
 - [ ] Phase 6 — AI Flight Coach (exploratory, not committed): not started.
 - [ ] Phase 7 — Integrated Platform: not started, not designed.
 
@@ -338,6 +343,69 @@ bottom of the dashboard.
   session has access to a log from an actual known crash, re-verify
   these thresholds catch it and adjust if needed.
 
+## Phase 5 details
+
+Added an "Attitude Reconstruction (3D, orientation only)" panel at the
+very bottom of the dashboard: a small CSS-3D drone model (X-quad shape,
+motors numbered/colored to match the Phase 2 top-down diagram) with
+play/pause and a scrub slider, driven directly by `imuQuaternion`.
+
+- **No new dependency added** - built with plain CSS 3D transforms
+  (`transform-style: preserve-3d`, `matrix3d()`), not Three.js or any 3D
+  library. The visual is simple enough (one small rigid shape, one live
+  transform) not to need one.
+- `src/attitude3d.js`: original code. `quaternionToCssMatrix3d()` builds
+  the rotation matrix straight from the normalized quaternion (via
+  `BBLUnits.normalizeQuaternion()`, shared with the Phase 1 Euler-angle
+  chart) rather than going through Euler angles - this avoids gimbal-lock
+  artifacts near +-90deg pitch, which a real tumble or inverted flight
+  could actually reach. `createPlayer()` is a small requestAnimationFrame-
+  based playback controller (play/pause/seek, binary-searches `ds.t` for
+  the nearest sample to the target flight-time).
+- `buildDataset()` (`app.js`) now also stores the normalized quaternion
+  per sample (`ds.attQuat.{x,y,z,w}`), not just the derived Euler angles,
+  specifically so the 3D model has gimbal-lock-free data to work with.
+  `units.js` was refactored (`normalizeQuaternion()` /
+  `eulerDegreesFromNormalizedQuaternion()` split out from
+  `quaternionToEulerDegrees()`) so both code paths share the exact same
+  normalization step.
+
+### Confidence notes (Phase 5)
+
+- **The rotation matrix math is validated, the 3D visual mapping is
+  not** - these are two different claims and it's important to keep them
+  separate. `BBLAttitude3D.selfTest()` re-derives roll/pitch/heading from
+  the constructed matrix and checks it against
+  `BBLUnits.eulerDegreesFromNormalizedQuaternion()` (the same formula
+  the already-trusted Phase 1 attitude chart uses) for 5 test
+  quaternions, including the identity and single-axis rotations. Roll and
+  pitch matched to within 0.01deg every time; heading matched up to a
+  known sign flip (Betaflight's own Euler formula has an explicit
+  negation baked in that the raw matrix extraction doesn't reproduce
+  verbatim - accounted for in the test, not a bug). This confirms the
+  matrix is a mathematically correct rotation for the quaternion.
+  **What it does NOT confirm**: which physical direction the model's
+  visual "nose" actually points relative to the real aircraft's forward
+  direction - that's a labeling choice (which local axis of the matrix
+  I call "forward" and place the nose marker on), and there's no video
+  of this flight to check it against. Cross-checked against the real
+  log instead: at t=65.2s the model's heading readout (190deg) matches
+  the ~170deg heading swing already visible and understood from the
+  Phase 1 attitude chart, and the model visibly rotated ~180deg between
+  t=0 and t=65s consistent with that - this is reassuring but is a
+  self-consistency check against data already known to be correct, not
+  independent proof the 3D shape's "forward" is right.
+- **If the owner notices the model's nose is backwards** (e.g. clearly
+  pitches away from the direction they remember accelerating toward),
+  that's a one-line fix: flip the sign of the local X-axis position used
+  for the nose/arm placement in `renderAttitude3DSection()` (`app.js`) -
+  flag it and it'll get fixed, this was anticipated as the most likely
+  thing to need correcting.
+- Playback and scrubbing were exercised against the real log
+  (`btfl_007.bbl`): play ran to completion at exactly t=77.3s (the known
+  flight duration), and the scrub slider correctly seeks to arbitrary
+  points.
+
 ## Decoder architecture & licensing (important — read before touching src/)
 
 `src/tools.js`, `src/datastream.js`, `src/decoders.js`, `src/decoder.js`,
@@ -363,8 +431,9 @@ exactly what was changed in the port. Summary of changes:
 - Frame/predictor/encoding parsing logic and the frame-stream resync logic
   are otherwise a faithful, unmodified port.
 
-`src/charts.js`, `src/fft.js`, `src/pidanalysis.js`, and `src/app.js` are
-original code (not ported), written for this project.
+`src/charts.js`, `src/fft.js`, `src/pidanalysis.js`, `src/crashdetect.js`
+(except `DISARM_REASON_NAMES`, transcribed from upstream), `src/attitude3d.js`,
+and `src/app.js` are original code (not ported), written for this project.
 
 **Licensing consequence**: because this repo incorporates GPL-3.0 code,
 the whole repo is licensed GPL-3.0 (see `LICENSE` at repo root and
@@ -385,6 +454,7 @@ project with no commercial angle, GPL-3.0 has no practical downside.
   fft.js            FFT + vibration spectrum analysis (original, self-tested)
   pidanalysis.js    step-response symptom detection (original, self-tested)
   crashdetect.js    crash/anomaly detectors (original, self-tested)
+  attitude3d.js     3D rotation matrix + playback controller (original, self-tested)
   charts.js         uPlot chart-creation helper (original)
   app.js            dataset builder + dashboard orchestration (original)
 /logs/              Sample .bbl files (safe, no location data)
@@ -396,13 +466,17 @@ NOTICE.md           Attribution details for the ported code
 
 Load order in `index.html` matters: uPlot CDN -> tools.js -> datastream.js
 -> decoders.js -> decoder.js -> units.js -> fft.js -> pidanalysis.js ->
-crashdetect.js -> charts.js -> app.js (each later file depends on globals
-defined by the ones before it).
+crashdetect.js -> attitude3d.js -> charts.js -> app.js (each later file
+depends on globals defined by the ones before it).
 
 ## Open issues / things to know for next session
 
-- **Phase 4 needs the owner's manual confirmation** in their own browser
-  (only verified programmatically/self-tested this session).
+- **Phase 5 needs the owner's manual confirmation** in their own browser
+  - specifically worth checking whether the 3D model's nose visually
+  points the direction it should during a moment the owner remembers
+  clearly (e.g. a punch-out or hard turn). See the Phase 5 confidence
+  notes above for exactly what was and wasn't independently verified,
+  and the one-line fix if the nose is backwards.
 - **Motor "desync" detection is a known, explicitly-flagged gap** (Phase
   4) - no RPM/eRPM telemetry in this log to detect it reliably. Revisit
   only if a future log ever has bidirectional DShot data.
