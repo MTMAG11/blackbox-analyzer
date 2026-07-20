@@ -59,6 +59,7 @@ function buildDataset(bytes, segment) {
   const gyroFilt = [[], [], []]; // deg/s
   const gyroUnfilt = [[], [], []]; // deg/s
   const pid = { P: [[], [], []], I: [[], [], []], D: [[], [], []], F: [[], [], []] };
+  const setpoint = [[], [], []]; // roll, pitch, yaw - deg/s, already scaled in the log (BF >=4.0.0)
   const vbat = []; // volts if convertible, else raw
   const motor = [[], [], [], []];
   const attRoll = [],
@@ -69,6 +70,7 @@ function buildDataset(bytes, segment) {
   let idx = null;
   let hasGyroUnfilt = false;
   let hasQuat = false;
+  let hasSetpoint = false;
   let vbatIsVolts = false;
   let t0 = null;
 
@@ -108,6 +110,11 @@ function buildDataset(bytes, segment) {
       }
     }
 
+    for (let axis = 0; axis < 3; axis++) {
+      const i = idx[`setpoint[${axis}]`];
+      setpoint[axis].push(i !== undefined ? frame[i] : NaN);
+    }
+
     {
       const i = idx["vbatLatest"];
       if (i === undefined) {
@@ -143,6 +150,7 @@ function buildDataset(bytes, segment) {
     idx["imuQuaternion[0]"] !== undefined &&
     idx["imuQuaternion[1]"] !== undefined &&
     idx["imuQuaternion[2]"] !== undefined;
+  hasSetpoint = idx["setpoint[0]"] !== undefined && idx["setpoint[1]"] !== undefined && idx["setpoint[2]"] !== undefined;
   vbatIsVolts = BBLUnits.vbatLatestToVolts(parser.sysConfig, 0) !== null;
 
   parser.parseLogData(false, undefined, segment.end);
@@ -157,6 +165,8 @@ function buildDataset(bytes, segment) {
     gyroUnfilt,
     hasGyroUnfilt,
     pid,
+    setpoint,
+    hasSetpoint,
     vbat,
     vbatIsVolts,
     motor,
@@ -265,6 +275,50 @@ function renderDashboard(ds) {
   // this content suppressed by the FC's own filters)
   if (ds.hasGyroUnfilt) {
     renderSpectrumSection(chartsRoot, ds);
+  }
+
+  // 8. PID tuning: gyro-vs-setpoint tracking error and step-response symptoms
+  if (ds.hasSetpoint) {
+    renderPidAnalysisSection(chartsRoot, ds);
+  }
+}
+
+function renderPidAnalysisSection(chartsRoot, ds) {
+  const heading = document.createElement("h2");
+  heading.textContent = "PID Tracking (setpoint vs gyro)";
+  heading.style.fontSize = "0.95rem";
+  heading.style.margin = "1.5rem 0 0.25rem";
+  chartsRoot.appendChild(heading);
+
+  const note = document.createElement("p");
+  note.className = "subtitle";
+  note.style.margin = "0 0 0.75rem";
+  note.textContent =
+    "Detects step-input symptoms (overshoot, oscillation, sluggish settling) from how closely gyro tracked setpoint. Symptoms only, not a tuning recommendation - see the note below each axis for what this can and can't tell you.";
+  chartsRoot.appendChild(note);
+
+  const sampleRateHz = 1e6 / ds.sysConfig.looptime;
+  const axisNames = ["Roll", "Pitch", "Yaw"];
+  const responseWindowMs = 250;
+
+  for (let axis = 0; axis < 3; axis++) {
+    const error = BBLPidAnalysis.computeError(ds.setpoint[axis], ds.gyroFilt[axis]);
+    const events = BBLPidAnalysis.analyzeStepResponses(ds.setpoint[axis], ds.gyroFilt[axis], sampleRateHz, {
+      responseWindowMs,
+    });
+    const summary = BBLPidAnalysis.summarize(events, axisNames[axis], responseWindowMs);
+
+    BBLCharts.createLineChart(
+      chartsRoot,
+      `${axisNames[axis]} Setpoint vs Gyro (deg/s)`,
+      ds.t,
+      [
+        { label: "Setpoint", slot: 1, data: ds.setpoint[axis] },
+        { label: "Gyro (filtered)", slot: 2, data: ds.gyroFilt[axis] },
+        { label: "Error", slot: 3, data: error, dashed: true },
+      ],
+      { footerHtml: `<div>${summary}</div>` },
+    );
   }
 }
 

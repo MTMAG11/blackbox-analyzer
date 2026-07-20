@@ -39,7 +39,13 @@ you don't need prior conversation history.
   signals; owner tested the whole dashboard in their own browser and
   reported 3 issues (chart sizing, motor numbering, legend flicker), all
   fixed - see "Phase 2 UI fixes" below.
-- [ ] Phase 3 — PID Tuning Analyzer: not started.
+- [x] **Phase 3 — PID Tuning Analyzer**: built and self-verified (step-
+  response detection validated via `BBLPidAnalysis.selfTest()` against a
+  synthetic underdamped 2nd-order response with analytically known
+  overshoot % and settling time; full pipeline also run against the real
+  sample log and produced sane, plausible numbers - see "Phase 3 details"
+  below), but not yet manually confirmed by the owner in their own
+  browser. Confirm next session before treating this as fully closed.
 - [ ] Phase 4 — Automatic Crash Detector: not started.
 - [ ] Phase 5 — Attitude Reconstruction: not started.
 - [ ] Phase 6 — AI Flight Coach (exploratory, not committed): not started.
@@ -189,6 +195,84 @@ analysis cares about, so the filtered signal would hide it).
   depends on the displayed number's digit count. Verified: legend height
   stayed exactly constant across 20 simulated cursor positions swept
   across a chart (previously would have varied).
+- **Legend series toggle replaced with a checkbox**: uPlot's default
+  toggle dims the whole legend row to 30% opacity when a series is
+  hidden, which read as an error state rather than an off switch (owner
+  feedback). Replaced with a checkbox-style marker in
+  `enhanceLegendCheckboxes()` (`charts.js`): filled + checkmark = showing
+  (the default), hollow = hidden, label text stays full opacity always.
+  Implemented via a `MutationObserver` watching each legend row's class
+  for uPlot's own `u-off` toggle, since uPlot doesn't expose a toggle
+  callback directly. Verified: default state is all-checked, clicking a
+  marker toggles to hollow/no-checkmark while the series actually
+  disappears from the chart.
+
+## Phase 3 details
+
+Added a "PID Tracking (setpoint vs gyro)" section below the vibration
+spectrum, one chart per axis (Roll/Pitch/Yaw) plotting Setpoint, Gyro
+(filtered), and the tracking Error (`setpoint - gyro`), with a text
+summary of detected step-response symptoms underneath each chart.
+
+- `src/pidanalysis.js`: original code (not ported), standard control-
+  systems step-response analysis (the same kind used to characterize any
+  feedback loop's overshoot/settling/oscillation), applied heuristically
+  to noisy real flight data rather than a clean bench step test.
+  - `detectStepEvents()`: finds deliberate stick inputs (rapid, sustained
+    setpoint changes over a 20ms window, at least 60deg/s, at least
+    250ms apart) as distinct from normal continuous stick wiggle.
+  - `analyzeStepResponses()`: for each detected step, measures overshoot
+    (peak error swing *past* the target in the opposite direction from
+    the initial approach - not the same as the initial catch-up lag,
+    which is normal), oscillation (hysteresis-based band-crossing count -
+    see confidence notes), and settling time (first point error stays
+    within a tolerance band for a sustained hold).
+  - `summarize()`: turns the per-event results into hedged, plain-English
+    text. Never suggests a specific new PID number, per the project's
+    hard rule - describes symptoms only.
+- Confirmed from the real upstream source (`flightlog.js`, not guessed)
+  that `setpoint[0-2]` needs **no unit conversion** on this firmware
+  (Betaflight >=4.0.0 uses it raw, already in deg/s, same units as
+  converted `gyroADC`) - see git log for the exact source lines checked.
+- Correctness validated by `BBLPidAnalysis.selfTest()`: builds a synthetic
+  underdamped 2nd-order step response (zeta=0.3, wn=20rad/s) with an
+  *analytically known* overshoot % (37.23%, from the standard formula)
+  and settling time (~667ms, from the standard "4/(zeta*wn)" formula),
+  runs it through the real detection pipeline, and checks the measured
+  values land close to the known-correct ones. Passed: measured overshoot
+  37.23% (essentially exact), measured settling 562ms (within the known
+  imprecision of that textbook approximation formula, not a bug).
+
+### Confidence notes (Phase 3)
+
+- **The oscillation ("ringing") detector went through one real bug found
+  by testing against real data, not just the synthetic self-test.** A
+  first version counted every raw sign-change of the error signal as a
+  "zero crossing" - passed the clean synthetic self-test fine (7
+  crossings, sensible for that smooth waveform), but on the real log
+  produced 15-85 "crossings" per event, almost all sensor noise wiggling
+  near zero rather than real oscillation. Fixed with a hysteresis
+  (Schmitt-trigger) band-crossing count instead: a crossing only counts
+  when the error genuinely swings from outside the tolerance band on one
+  side to outside it on the other. Re-verified against both the
+  self-test (still passes, now reports a more sensible 3 crossings) and
+  the real log (now mostly 0-3 crossings per event, occasionally higher
+  for genuinely oscillatory events, instead of the absurd 15-85). This is
+  exactly the kind of thing "verify against real data, not just a clean
+  synthetic test" is for.
+- **Step detection and response-window thresholds (60deg/s minimum step,
+  20ms detection window, 250ms response window, 15% settle tolerance)
+  are reasonable first-pass choices, not tuned against a large dataset.**
+  They produced plausible-looking results on the one real log available
+  (14 roll steps, 6 pitch steps, 2 yaw steps, overshoot 0-90%, settling
+  10-97ms) but haven't been validated against a second log or against
+  the owner's own sense of how that flight felt to fly. Revisit if a
+  future log's results look implausible.
+- **Symptom labels are explicitly hedged, never a diagnosis or a PID
+  number**, per the project's hard rule. "Oscillation detected" says
+  "possible sign of P or D gain... though this alone isn't conclusive
+  (could also be pilot input, turbulence, or something unrelated)" -
+  this is intentional, not a hedge to remove later.
 
 ## Decoder architecture & licensing (important — read before touching src/)
 
@@ -215,8 +299,8 @@ exactly what was changed in the port. Summary of changes:
 - Frame/predictor/encoding parsing logic and the frame-stream resync logic
   are otherwise a faithful, unmodified port.
 
-`src/charts.js` and `src/app.js` are original code (not ported), written
-for this project.
+`src/charts.js`, `src/fft.js`, `src/pidanalysis.js`, and `src/app.js` are
+original code (not ported), written for this project.
 
 **Licensing consequence**: because this repo incorporates GPL-3.0 code,
 the whole repo is licensed GPL-3.0 (see `LICENSE` at repo root and
@@ -235,6 +319,7 @@ project with no commercial angle, GPL-3.0 has no practical downside.
   decoder.js        FlightLogParser - the main decoder (ported, trimmed)
   units.js          unit conversion formulas (ported, trimmed - see above)
   fft.js            FFT + vibration spectrum analysis (original, self-tested)
+  pidanalysis.js    step-response symptom detection (original, self-tested)
   charts.js         uPlot chart-creation helper (original)
   app.js            dataset builder + dashboard orchestration (original)
 /logs/              Sample .bbl files (safe, no location data)
@@ -245,8 +330,9 @@ NOTICE.md           Attribution details for the ported code
 ```
 
 Load order in `index.html` matters: uPlot CDN -> tools.js -> datastream.js
--> decoders.js -> decoder.js -> units.js -> fft.js -> charts.js -> app.js
-(each later file depends on globals defined by the ones before it).
+-> decoders.js -> decoder.js -> units.js -> fft.js -> pidanalysis.js ->
+charts.js -> app.js (each later file depends on globals defined by the
+ones before it).
 
 ## Open issues / things to know for next session
 
@@ -257,14 +343,21 @@ Load order in `index.html` matters: uPlot CDN -> tools.js -> datastream.js
   multiple check-ins). Nothing to do here but wait for GitHub and check
   again; every deploy attempt so far has failed at startup, gotten stuck
   queued, or been auto-cancelled by a newer push superseding it.
+- **Phase 3 needs the owner's manual confirmation** in their own browser
+  (only verified programmatically this session, same as Phase 2 was
+  before the owner tested it and found the 3 UI issues that got fixed -
+  worth specifically sanity-checking whether the flagged "oscillation"
+  events match what the flight actually felt like to fly).
 - **Motor layout diagram assumes a standard Quad X frame** with stock
   Betaflight motor numbering - it's a generic reference diagram, not read
   from the log. If the owner's frame is a different layout or has a
   custom motor remap, this diagram would need to become configurable
   (not worth building until/unless it's actually wrong for their setup).
-- rcCommand and PID terms are raw units, not real-world units (see
-  confidence notes above) - fine for now, revisit if Phase 3 (PID tuning
-  analyzer) needs real units for its symptom descriptions.
+- rcCommand and PID terms (P/I/D/F) are raw units, not real-world units
+  (see Phase 1 confidence notes) - setpoint and gyro ARE real units
+  (deg/s) as of Phase 3, since that conversion was verified against the
+  source. Revisit rcCommand/PID-term units only if a future phase
+  actually needs them in real-world terms.
 - No performance profiling done yet on very long flights (this sample was
   ~1m17s of flight data across 155k frames and rendered fine; haven't
   tested a 5+ minute flight).
