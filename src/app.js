@@ -311,6 +311,12 @@ function renderDashboard(ds) {
   if (ds.hasQuat) {
     renderAttitude3DSection(chartsRoot, ds);
   }
+
+  // 11. Flight metrics (exploratory) - objective numbers only, never a
+  // subjective "good/bad flying" rating (no labeled ground truth for that)
+  if (ds.hasSetpoint) {
+    renderFlightCoachSection(chartsRoot, ds);
+  }
 }
 
 function confidenceBadgeHtml(confidence) {
@@ -350,6 +356,75 @@ function renderCrashSection(chartsRoot, ds) {
   }
 
   wrap.appendChild(list);
+  chartsRoot.appendChild(wrap);
+}
+
+function metricRow(label, value) {
+  return `<dt>${label}:</dt><dd>${value}</dd>`;
+}
+
+function renderFlightCoachSection(chartsRoot, ds) {
+  const wrap = document.createElement("div");
+  wrap.className = "chart-panel";
+
+  const h = document.createElement("h3");
+  h.textContent = "Flight Metrics (exploratory)";
+  wrap.appendChild(h);
+
+  const note = document.createElement("p");
+  note.className = "diagram-note";
+  note.textContent =
+    "Objective numbers only - not a skill rating or a \"good/bad flying\" judgment. There's no labeled dataset of flights scored by a human to calibrate a rating against, so this section deliberately stops at description. Read these as raw data points, not a grade.";
+  wrap.appendChild(note);
+
+  const sampleRateHz = 1e6 / ds.sysConfig.looptime;
+  const durationSec = ds.t.length ? ds.t[ds.t.length - 1] : 0;
+
+  const grid = document.createElement("div");
+  grid.className = "metrics-grid";
+
+  const throttle = BBLFlightCoach.throttleSmoothness(ds.stick[3], sampleRateHz);
+  const throttleGroup = document.createElement("div");
+  throttleGroup.className = "metrics-group";
+  throttleGroup.innerHTML = `<h4>Throttle</h4><dl>
+    ${metricRow("Mean", throttle.mean.toFixed(0))}
+    ${metricRow("Std dev", throttle.stdDev.toFixed(1))}
+    ${metricRow("Mean |rate of change|", `${throttle.meanAbsRatePerSec.toFixed(0)}/s`)}
+  </dl>`;
+  grid.appendChild(throttleGroup);
+
+  const axisNames = ["Roll", "Pitch", "Yaw"];
+  for (let axis = 0; axis < 3; axis++) {
+    const activity = BBLFlightCoach.stickActivity(ds.stick[axis], sampleRateHz, durationSec);
+    const group = document.createElement("div");
+    group.className = "metrics-group";
+    group.innerHTML = `<h4>${axisNames[axis]} Stick Activity</h4><dl>
+      ${metricRow("Mean |rate of change|", `${activity.meanAbsRatePerSec.toFixed(0)}/s`)}
+      ${metricRow("Direction reversals", `${activity.reversals} (${activity.reversalsPerMin.toFixed(1)}/min)`)}
+    </dl>`;
+    grid.appendChild(group);
+  }
+
+  wrap.appendChild(grid);
+
+  const disturbanceNote = document.createElement("div");
+  disturbanceNote.className = "chart-footer";
+  const parts = [];
+  for (let axis = 0; axis < 3; axis++) {
+    const stepEvents = BBLPidAnalysis.detectStepEvents(ds.setpoint[axis], sampleRateHz);
+    const stepEventTimesSec = stepEvents.map((e) => e.index / sampleRateHz);
+    const disturbances = BBLFlightCoach.detectDisturbances(
+      ds.setpoint[axis],
+      ds.gyroFilt[axis],
+      ds.t,
+      sampleRateHz,
+      stepEventTimesSec,
+    );
+    parts.push(`<div><b>${axisNames[axis]}:</b> ${BBLFlightCoach.summarizeDisturbances(disturbances, 500)}</div>`);
+  }
+  disturbanceNote.innerHTML = `<div style="margin-bottom:0.3rem;"><b>Disturbance recovery</b> (off-track moments not matching a stick input, distinct from the pilot-input step responses in the PID Tracking section above):</div>${parts.join("")}`;
+  wrap.appendChild(disturbanceNote);
+
   chartsRoot.appendChild(wrap);
 }
 

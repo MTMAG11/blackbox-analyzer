@@ -49,15 +49,25 @@ you don't need prior conversation history.
   spike/dropout events; owner confirmed it looks right in their own
   browser against the real sample log (correctly zero false positives -
   see "Phase 4 details" below).
-- [x] **Phase 5 — Attitude Reconstruction**: built and self-verified (3D
-  rotation matrix validated via `BBLAttitude3D.selfTest()` against the
-  already-trusted Phase 1 Euler formula for 5 test quaternions - roll and
-  pitch match exactly, heading matches up to Betaflight's own known sign
-  convention; play/pause/scrub controls exercised against the real log
-  and correctly reached the exact known flight duration - see "Phase 5
-  details" below), but not yet manually confirmed by the owner in their
-  own browser.
-- [ ] Phase 6 — AI Flight Coach (exploratory, not committed): not started.
+- [x] **Phase 5 — Attitude Reconstruction**: DONE. Rotation matrix
+  validated via `BBLAttitude3D.selfTest()` against the already-trusted
+  Phase 1 Euler formula. Owner confirmed the model in their own browser,
+  and refined the display convention through two rounds of real-flight
+  feedback: (1) originally applied the full quaternion including yaw,
+  which was correct but visually spun the nose toward/away from the
+  viewer every turn - changed to a chase-cam style that dropped yaw
+  entirely; (2) that overcorrected (nose froze pointing right, never
+  turned) - owner clarified they wanted it to start nose-away-from-viewer
+  and then turn left/right *relative to that start* as the real flight
+  did. Final version (`BBLAttitude3D.eulerQuaternion()`) does exactly
+  that - confirmed working. See "Phase 5 details" below.
+- [x] **Phase 6 — AI Flight Coach (exploratory)**: built and self-verified
+  (`BBLFlightCoach.selfTest()` passed, manually traced by hand first
+  since the in-session preview browser was briefly unresponsive this
+  session - then actually executed once the browser recovered, matching
+  the hand trace exactly; full pipeline also run against the real sample
+  log - see "Phase 6 details" below), but not yet manually confirmed by
+  the owner in their own browser.
 - [ ] Phase 7 — Integrated Platform: not started, not designed.
 
 ## Decoder verification (Phase 0)
@@ -395,16 +405,68 @@ play/pause and a scrub slider, driven directly by `imuQuaternion`.
   t=0 and t=65s consistent with that - this is reassuring but is a
   self-consistency check against data already known to be correct, not
   independent proof the 3D shape's "forward" is right.
-- **If the owner notices the model's nose is backwards** (e.g. clearly
-  pitches away from the direction they remember accelerating toward),
-  that's a one-line fix: flip the sign of the local X-axis position used
-  for the nose/arm placement in `renderAttitude3DSection()` (`app.js`) -
-  flag it and it'll get fixed, this was anticipated as the most likely
-  thing to need correcting.
+- **This anticipated caveat turned out to matter**: the owner did find
+  the initial version unintuitive on real footage - not backwards
+  exactly, but the model spun its nose toward/away from the viewer on
+  every yaw turn (mathematically correct for a fixed third-person view,
+  but not how they wanted to read it). Iterated twice against their
+  real-flight description (flew away, did a 180, came back) to land on
+  `BBLAttitude3D.eulerQuaternion()`: model starts nose-away-from-viewer
+  regardless of actual starting compass heading, yaw then rotates it
+  left/right relative to that start. Confirmed working. This is exactly
+  why the caveat was flagged instead of silently shipped as certain.
 - Playback and scrubbing were exercised against the real log
   (`btfl_007.bbl`): play ran to completion at exactly t=77.3s (the known
   flight duration), and the scrub slider correctly seeks to arbitrary
   points.
+
+## Phase 6 details
+
+Added a "Flight Metrics (exploratory)" panel at the very bottom of the
+dashboard - plain descriptive numbers, explicitly labeled as not a
+rating. Also added a "Disturbance recovery" subsection distinguishing
+off-track moments that don't match a stick input from the pilot-input
+step responses already covered in Phase 3.
+
+- `src/flightcoach.js`: original code. `throttleSmoothness()` and
+  `stickActivity()` are simple descriptive statistics (mean, std dev,
+  mean absolute rate of change, direction-reversal count/rate) - low
+  algorithmic risk, no detection logic to get wrong.
+  `detectDisturbances()` is the one genuinely new piece of logic: finds
+  moments the tracking error (setpoint - gyro) crosses a threshold
+  *without* a nearby deliberate setpoint step (reusing
+  `BBLPidAnalysis.detectStepEvents()` from Phase 3 purely to exclude
+  pilot-commanded moments), then measures recovery time using the same
+  hold-tolerance-band pattern already validated in Phase 3/4.
+- **Every function returns plain numbers - nothing scores, rates, or
+  grades the flight**, per the project's hard rule (no labeled ground
+  truth exists to calibrate a rating against). The UI panel's own
+  heading and note say so explicitly. This constraint should hold for
+  any future work on this section too, not just this first pass.
+
+### Confidence notes (Phase 6)
+
+- Validated by `BBLFlightCoach.selfTest()`: a synthetic disturbance far
+  from any step event must be detected with a correct recovery time; an
+  identical disturbance placed right at a logged step event must be
+  excluded. This session's preview browser was briefly unresponsive
+  (multiple fresh tabs failed to load), so the self-test's expected
+  result was worked out by hand first (traced the exponential-decay math
+  to a specific expected recovery time and event count) - then the
+  browser recovered and the test was actually executed, matching the
+  hand trace exactly (51ms recovery, 1 event found, near-step event
+  correctly excluded). Noting this because "trace it by hand" and
+  "execute it" are different levels of confidence, and both happened
+  here, in that order - the hand trace was never presented as a
+  substitute for running it.
+- The disturbance thresholds (40deg/s to trigger, 15deg/s to count as
+  recovered, 500ms analysis window) are reasonable first-pass values by
+  analogy with Phase 3/4's already-reasoned thresholds, not independently
+  tuned. Real-log output looked plausible (Roll: 7 events, ~37ms average
+  recovery; Pitch: 2 events, ~76ms; Yaw: none) but wasn't cross-checked
+  against the owner's own memory of the flight the way Phase 3's step
+  detection was implicitly checked by looking sane against the stick
+  chart.
 
 ## Decoder architecture & licensing (important — read before touching src/)
 
@@ -431,9 +493,10 @@ exactly what was changed in the port. Summary of changes:
 - Frame/predictor/encoding parsing logic and the frame-stream resync logic
   are otherwise a faithful, unmodified port.
 
-`src/charts.js`, `src/fft.js`, `src/pidanalysis.js`, `src/crashdetect.js`
-(except `DISARM_REASON_NAMES`, transcribed from upstream), `src/attitude3d.js`,
-and `src/app.js` are original code (not ported), written for this project.
+`src/charts.js`, `src/fft.js`, `src/pidanalysis.js`, `src/flightcoach.js`,
+`src/crashdetect.js` (except `DISARM_REASON_NAMES`, transcribed from
+upstream), `src/attitude3d.js`, and `src/app.js` are original code (not
+ported), written for this project.
 
 **Licensing consequence**: because this repo incorporates GPL-3.0 code,
 the whole repo is licensed GPL-3.0 (see `LICENSE` at repo root and
@@ -453,6 +516,7 @@ project with no commercial angle, GPL-3.0 has no practical downside.
   units.js          unit conversion formulas (ported, trimmed - see above)
   fft.js            FFT + vibration spectrum analysis (original, self-tested)
   pidanalysis.js    step-response symptom detection (original, self-tested)
+  flightcoach.js    exploratory objective flight metrics (original, self-tested)
   crashdetect.js    crash/anomaly detectors (original, self-tested)
   attitude3d.js     3D rotation matrix + playback controller (original, self-tested)
   charts.js         uPlot chart-creation helper (original)
@@ -466,17 +530,23 @@ NOTICE.md           Attribution details for the ported code
 
 Load order in `index.html` matters: uPlot CDN -> tools.js -> datastream.js
 -> decoders.js -> decoder.js -> units.js -> fft.js -> pidanalysis.js ->
-crashdetect.js -> attitude3d.js -> charts.js -> app.js (each later file
-depends on globals defined by the ones before it).
+flightcoach.js -> crashdetect.js -> attitude3d.js -> charts.js -> app.js
+(each later file depends on globals defined by the ones before it;
+flightcoach.js specifically needs pidanalysis.js loaded first for
+BBLPidAnalysis.computeError/detectStepEvents).
 
 ## Open issues / things to know for next session
 
-- **Phase 5 needs the owner's manual confirmation** in their own browser
-  - specifically worth checking whether the 3D model's nose visually
-  points the direction it should during a moment the owner remembers
-  clearly (e.g. a punch-out or hard turn). See the Phase 5 confidence
-  notes above for exactly what was and wasn't independently verified,
-  and the one-line fix if the nose is backwards.
+- **Phase 6 needs the owner's manual confirmation** in their own browser
+  (only self-tested/verified programmatically this session).
+- **The in-session preview browser used for testing was briefly
+  unresponsive this session** (multiple fresh tabs failed to load the
+  local file) - recovered on its own after several attempts, including
+  one where an already-open background tab turned out to have the file
+  loaded correctly. Not a real bug in the site; a repeat of the same
+  general flakiness noted after Phase 2 (see below), just a more severe
+  instance. If a future session hits this, try `preview_list` to check
+  for an already-loaded tab before assuming a fresh `navigate` will work.
 - **Motor "desync" detection is a known, explicitly-flagged gap** (Phase
   4) - no RPM/eRPM telemetry in this log to detect it reliably. Revisit
   only if a future log ever has bidirectional DShot data.
