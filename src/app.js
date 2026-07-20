@@ -75,6 +75,9 @@ function buildDataset(bytes, segment) {
   let hasQuat = false;
   let hasSetpoint = false;
   let hasBaroAlt = false;
+  let hasStick = false;
+  let hasMotor = false;
+  let hasVbat = false;
   let vbatIsVolts = false;
   let t0 = null;
   let lastKnownTime = null;
@@ -178,6 +181,9 @@ function buildDataset(bytes, segment) {
     idx["imuQuaternion[2]"] !== undefined;
   hasSetpoint = idx["setpoint[0]"] !== undefined && idx["setpoint[1]"] !== undefined && idx["setpoint[2]"] !== undefined;
   hasBaroAlt = idx["baroAlt"] !== undefined;
+  hasStick = idx["rcCommand[0]"] !== undefined;
+  hasMotor = idx["motor[0]"] !== undefined;
+  hasVbat = idx["vbatLatest"] !== undefined;
   vbatIsVolts = BBLUnits.vbatLatestToVolts(parser.sysConfig, 0) !== null;
 
   parser.parseLogData(false, undefined, segment.end);
@@ -188,6 +194,7 @@ function buildDataset(bytes, segment) {
     frameCount,
     t,
     stick,
+    hasStick,
     gyroFilt,
     gyroUnfilt,
     hasGyroUnfilt,
@@ -196,9 +203,11 @@ function buildDataset(bytes, segment) {
     hasSetpoint,
     vbat,
     vbatIsVolts,
+    hasVbat,
     baroAlt,
     hasBaroAlt,
     motor,
+    hasMotor,
     hasQuat,
     attRoll,
     attPitch,
@@ -301,15 +310,22 @@ function renderOverviewTab(container, ds, crashFindings) {
 }
 
 function renderFlightReplayTab(container, ds) {
-  // 1. Stick & throttle inputs
-  BBLCharts.createLineChart(container, "Stick & Throttle Inputs (raw rcCommand)", ds.t, [
-    { label: "Roll", slot: 1, data: ds.stick[0] },
-    { label: "Pitch", slot: 2, data: ds.stick[1] },
-    { label: "Yaw", slot: 3, data: ds.stick[2] },
-    { label: "Throttle", slot: 4, data: ds.stick[3] },
-  ]);
+  // 1. Stick & throttle inputs (RC input can be disabled in Betaflight's
+  // Blackbox tab since 4.3 to save space, like every other field group
+  // checked here - not assumed present just because it usually is)
+  if (ds.hasStick) {
+    BBLCharts.createLineChart(container, "Stick & Throttle Inputs (raw rcCommand)", ds.t, [
+      { label: "Roll", slot: 1, data: ds.stick[0] },
+      { label: "Pitch", slot: 2, data: ds.stick[1] },
+      { label: "Yaw", slot: 3, data: ds.stick[2] },
+      { label: "Throttle", slot: 4, data: ds.stick[3] },
+    ]);
+  } else {
+    renderMissingFieldNote(container, "No RC command (stick/throttle) data in this log - this field group was disabled when the flight was logged.");
+  }
 
-  // 2. Gyro filtered vs unfiltered, one chart per axis
+  // 2. Gyro filtered vs unfiltered, one chart per axis (gyro is always
+  // logged - Betaflight doesn't offer a checkbox to disable it)
   const axisNames = ["Roll", "Pitch", "Yaw"];
   for (let axis = 0; axis < 3; axis++) {
     const seriesDefs = [{ label: `${axisNames[axis]} (filtered)`, slot: axis + 1, data: ds.gyroFilt[axis] }];
@@ -319,35 +335,48 @@ function renderFlightReplayTab(container, ds) {
     BBLCharts.createLineChart(container, `Gyro ${axisNames[axis]} (deg/s)`, ds.t, seriesDefs);
   }
 
-  // 3. PID terms, one chart per axis
+  // 3. PID terms, one chart per axis (whole group can be disabled)
   const pidSlots = { P: 1, I: 2, D: 3, F: 4 };
-  for (let axis = 0; axis < 3; axis++) {
-    const seriesDefs = [];
-    for (const term of ["P", "I", "D", "F"]) {
-      if (ds.pid[term][axis].some((v) => !Number.isNaN(v))) {
-        seriesDefs.push({ label: term, slot: pidSlots[term], data: ds.pid[term][axis] });
+  const hasPid = ["P", "I", "D", "F"].some((term) => ds.pid[term].some((axisArr) => axisArr.some((v) => !Number.isNaN(v))));
+  if (hasPid) {
+    for (let axis = 0; axis < 3; axis++) {
+      const seriesDefs = [];
+      for (const term of ["P", "I", "D", "F"]) {
+        if (ds.pid[term][axis].some((v) => !Number.isNaN(v))) {
+          seriesDefs.push({ label: term, slot: pidSlots[term], data: ds.pid[term][axis] });
+        }
       }
+      BBLCharts.createLineChart(container, `${axisNames[axis]} PID Terms (raw)`, ds.t, seriesDefs);
     }
-    BBLCharts.createLineChart(container, `${axisNames[axis]} PID Terms (raw)`, ds.t, seriesDefs);
+  } else {
+    renderMissingFieldNote(container, "No PID term data in this log - this field group was disabled when the flight was logged.");
   }
 
   // 4. Battery voltage
-  BBLCharts.createLineChart(
-    container,
-    ds.vbatIsVolts ? "Battery Voltage (V)" : "Battery (raw units)",
-    ds.t,
-    [{ label: "vbat", slot: 1, data: ds.vbat }],
-  );
+  if (ds.hasVbat) {
+    BBLCharts.createLineChart(
+      container,
+      ds.vbatIsVolts ? "Battery Voltage (V)" : "Battery (raw units)",
+      ds.t,
+      [{ label: "vbat", slot: 1, data: ds.vbat }],
+    );
+  } else {
+    renderMissingFieldNote(container, "No battery voltage data in this log - this field group was disabled when the flight was logged.");
+  }
 
   // 5. Motor outputs (labeled 1-4 to match Betaflight's own motor numbering,
   // even though the log field names and ds.motor[] are 0-indexed internally)
   renderMotorLayoutDiagram(container);
-  BBLCharts.createLineChart(container, "Motor Outputs (raw)", ds.t, [
-    { label: "Motor 1", slot: 1, data: ds.motor[0] },
-    { label: "Motor 2", slot: 2, data: ds.motor[1] },
-    { label: "Motor 3", slot: 3, data: ds.motor[2] },
-    { label: "Motor 4", slot: 4, data: ds.motor[3] },
-  ]);
+  if (ds.hasMotor) {
+    BBLCharts.createLineChart(container, "Motor Outputs (raw)", ds.t, [
+      { label: "Motor 1", slot: 1, data: ds.motor[0] },
+      { label: "Motor 2", slot: 2, data: ds.motor[1] },
+      { label: "Motor 3", slot: 3, data: ds.motor[2] },
+      { label: "Motor 4", slot: 4, data: ds.motor[3] },
+    ]);
+  } else {
+    renderMissingFieldNote(container, "No motor output data in this log - this field group was disabled when the flight was logged.");
+  }
 
   // 6. Attitude (orientation only - no GPS, no spatial position)
   if (ds.hasQuat) {
@@ -426,6 +455,13 @@ function renderDashboard(ds) {
   activate(tabNames[0]);
 }
 
+function renderMissingFieldNote(container, message) {
+  const p = document.createElement("p");
+  p.className = "diagram-note";
+  p.textContent = message;
+  container.appendChild(p);
+}
+
 function confidenceBadgeHtml(confidence) {
   const labels = { high: "High confidence", medium: "Possible", info: "Info" };
   return `<span class="finding-badge ${confidence}">${labels[confidence] ?? confidence}</span>`;
@@ -484,33 +520,37 @@ function renderFlightCoachSection(chartsRoot, ds) {
 
   const sampleRateHz = 1e6 / ds.sysConfig.looptime;
   const durationSec = ds.t.length ? ds.t[ds.t.length - 1] : 0;
-
-  const grid = document.createElement("div");
-  grid.className = "metrics-grid";
-
-  const throttle = BBLFlightCoach.throttleSmoothness(ds.stick[3], sampleRateHz);
-  const throttleGroup = document.createElement("div");
-  throttleGroup.className = "metrics-group";
-  throttleGroup.innerHTML = `<h4>Throttle</h4><dl>
-    ${metricRow("Mean", throttle.mean.toFixed(0))}
-    ${metricRow("Std dev", throttle.stdDev.toFixed(1))}
-    ${metricRow("Mean |rate of change|", `${throttle.meanAbsRatePerSec.toFixed(0)}/s`)}
-  </dl>`;
-  grid.appendChild(throttleGroup);
-
   const axisNames = ["Roll", "Pitch", "Yaw"];
-  for (let axis = 0; axis < 3; axis++) {
-    const activity = BBLFlightCoach.stickActivity(ds.stick[axis], sampleRateHz, durationSec);
-    const group = document.createElement("div");
-    group.className = "metrics-group";
-    group.innerHTML = `<h4>${axisNames[axis]} Stick Activity</h4><dl>
-      ${metricRow("Mean |rate of change|", `${activity.meanAbsRatePerSec.toFixed(0)}/s`)}
-      ${metricRow("Direction reversals", `${activity.reversals} (${activity.reversalsPerMin.toFixed(1)}/min)`)}
-    </dl>`;
-    grid.appendChild(group);
-  }
 
-  wrap.appendChild(grid);
+  if (ds.hasStick) {
+    const grid = document.createElement("div");
+    grid.className = "metrics-grid";
+
+    const throttle = BBLFlightCoach.throttleSmoothness(ds.stick[3], sampleRateHz);
+    const throttleGroup = document.createElement("div");
+    throttleGroup.className = "metrics-group";
+    throttleGroup.innerHTML = `<h4>Throttle</h4><dl>
+      ${metricRow("Mean", throttle.mean.toFixed(0))}
+      ${metricRow("Std dev", throttle.stdDev.toFixed(1))}
+      ${metricRow("Mean |rate of change|", `${throttle.meanAbsRatePerSec.toFixed(0)}/s`)}
+    </dl>`;
+    grid.appendChild(throttleGroup);
+
+    for (let axis = 0; axis < 3; axis++) {
+      const activity = BBLFlightCoach.stickActivity(ds.stick[axis], sampleRateHz, durationSec);
+      const group = document.createElement("div");
+      group.className = "metrics-group";
+      group.innerHTML = `<h4>${axisNames[axis]} Stick Activity</h4><dl>
+        ${metricRow("Mean |rate of change|", `${activity.meanAbsRatePerSec.toFixed(0)}/s`)}
+        ${metricRow("Direction reversals", `${activity.reversals} (${activity.reversalsPerMin.toFixed(1)}/min)`)}
+      </dl>`;
+      grid.appendChild(group);
+    }
+
+    wrap.appendChild(grid);
+  } else {
+    renderMissingFieldNote(wrap, "No RC command (stick/throttle) data in this log - throttle and stick activity metrics need it.");
+  }
 
   const disturbanceNote = document.createElement("div");
   disturbanceNote.className = "chart-footer";

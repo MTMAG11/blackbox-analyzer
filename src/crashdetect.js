@@ -198,9 +198,19 @@ BBLCrashDetect.analyze = function (ds) {
   const findings = [
     ...BBLCrashDetect.evaluateDisarmEvents(ds.disarmEvents),
     ...BBLCrashDetect.detectGyroSpikes(ds.gyroFilt, ds.t),
-    ...BBLCrashDetect.detectMotorDropouts(ds.motor, ds.t, sampleRateHz, disarmTimesSec),
-    ...BBLCrashDetect.detectAbruptEnd(ds.motor, ds.t, disarmTimesSec),
   ];
+
+  // Both motor-based detectors compare values with < / > operators, which
+  // are always false against NaN - if motor data were entirely absent
+  // (Betaflight lets you disable that field group), every sample would
+  // wrongly look simultaneously "active" and "idle" and flood the results
+  // with false dropout findings. Skip both detectors instead of guessing.
+  if (ds.hasMotor) {
+    findings.push(
+      ...BBLCrashDetect.detectMotorDropouts(ds.motor, ds.t, sampleRateHz, disarmTimesSec),
+      ...BBLCrashDetect.detectAbruptEnd(ds.motor, ds.t, disarmTimesSec),
+    );
+  }
 
   findings.sort((a, b) => {
     const rankDiff = CONFIDENCE_RANK[a.confidence] - CONFIDENCE_RANK[b.confidence];

@@ -533,6 +533,56 @@ speculatively designed:
   application of an already-established pattern from earlier phases -
   low risk, high confidence.
 
+## Handling logs with disabled field groups (important - cross-cutting)
+
+The owner's sample log (`btfl_007.bbl`) has every Betaflight Blackbox
+field group enabled. But since Betaflight 4.3, the Blackbox tab lets you
+disable whole groups to save space - PID data, RC input, Setpoint,
+Battery voltage/current, Magnetometer, Altitude, RSSI, Debug, Motor
+outputs, GPS ([confirmed from Betaflight's own docs](https://oscarliang.com/blackbox/),
+not assumed). A future log could plausibly be missing any of these.
+
+The decoder itself (`decoder.js`) was always fine with this - it builds
+its field list dynamically from whatever the log's header declares, so
+it never assumed any particular field exists. The gap was entirely in
+`app.js`/`crashdetect.js`/`flightcoach.js` assuming certain "obviously
+always there" fields (RC input, motor outputs, battery) would in fact
+always be there.
+
+**What's guarded now** (checked via `ds.hasStick`/`hasMotor`/`hasVbat`/
+`hasGyroUnfilt`/`hasQuat`/`hasSetpoint`/`hasBaroAlt`/`hasPid` - see
+`buildDataset()` in `app.js` for where each is set): every chart in
+Flight Replay that depends on an optional field group shows a plain "No
+X data in this log" message instead of an empty chart when that group is
+absent. The Flight Metrics throttle/stick-activity block does the same
+instead of showing literal `NaN` text.
+
+**A real bug was found and fixed while testing this**, not just a
+hypothetical: `BBLCrashDetect.detectMotorDropouts()` and
+`detectAbruptEnd()` compare motor values with `<`/`>` against thresholds.
+In JavaScript, `NaN < x` and `NaN > x` are both always `false` - so with
+motor data entirely absent (all `NaN`), every single sample looked
+simultaneously "was active" and "is idle" (since neither comparison ever
+tripped to make either flag `false`), which flooded the crash detector
+with **78 false "motor dropout" findings** on a flight that actually had
+zero real anomalies. Fixed by skipping both motor-based detectors
+entirely when `ds.hasMotor` is `false`, rather than letting them run on
+data that isn't there. This is exactly why "will it crash" isn't the
+same question as "will it give a correct answer" - the code ran fine,
+it just ran to a very wrong conclusion. Verified by simulating a
+stick/motor/battery-disabled version of the real log (see git log for
+this commit) and confirming both the false-positive flood is gone
+(findings count back to the correct 1) and every affected panel shows
+the right message instead of blank charts or `NaN`.
+
+**Not yet audited for the same class of issue**: `pidanalysis.js`'s
+step-response detection and `flightcoach.js`'s disturbance detection both
+use `setpoint`, which is already gated behind `ds.hasSetpoint` at the
+call site (the whole PID Tuning / relevant Flight Metrics subsection is
+skipped, not just rendered with bad data) - lower risk than the motor
+case, but worth a specific look if a real log missing setpoint data ever
+turns up.
+
 ## Decoder architecture & licensing (important — read before touching src/)
 
 `src/tools.js`, `src/datastream.js`, `src/decoders.js`, `src/decoder.js`,
@@ -609,6 +659,15 @@ first for BBLPidAnalysis.computeError/detectStepEvents).
   logs (not just the one sample file) to see if the flight/non-flight
   classification thresholds hold up, and check the tabbed layout feels
   right for casual use.
+- **Missing-field-group handling was tested by simulating disabled
+  fields on the real log, not with an actual log recorded with fields
+  disabled** (no such log was available - the owner's sample has
+  everything on). If the owner ever records with something disabled from
+  Betaflight's Blackbox tab, worth loading it once to confirm real-world
+  behavior matches the simulated test. See "Handling logs with disabled
+  field groups" above for exactly what was and wasn't tested, and the
+  real bug (false-positive flood in the crash detector) that was found
+  and fixed this way.
 - **The in-session preview browser used for testing was briefly
   unresponsive this session** (multiple fresh tabs failed to load the
   local file) - recovered on its own after several attempts, including
