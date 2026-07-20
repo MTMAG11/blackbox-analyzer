@@ -60,25 +60,29 @@ BBLAttitude3D.multiplyQuaternions = function (a, b) {
 };
 
 /**
- * Build a quaternion from roll and pitch only (heading/yaw excluded).
- * Used for a "chase-cam" style display: the model's nose stays roughly
- * forward-facing regardless of which compass direction the aircraft was
- * actually pointing - only bank (roll) and nose-up/down (pitch) are shown
- * visually, heading is read off the text readout instead. This is a
- * deliberate choice (owner preference, not a bug): the earlier version
- * applied the full quaternion including yaw, which correctly reproduced a
- * fixed third-person view but visually spun the model's nose toward/away
- * from the viewer during turns - less intuitive for reviewing a flight
- * than seeing yaw only as a number.
+ * Build a display quaternion from roll, pitch, and a *display* yaw angle
+ * (ZYX order: yaw applied in the world frame, then pitch, then roll).
+ *
+ * Display convention (owner preference, iterated twice against the real
+ * flight): the model starts with its nose pointing AWAY from the viewer
+ * regardless of the actual compass heading at the start of the flight,
+ * and yaw turns then rotate it left/right relative to that starting
+ * direction. So the caller passes yawDeg = (heading - heading-at-start)
+ * plus the fixed -90deg screen offset that maps the model's local +X
+ * nose axis from "screen right" (its resting CSS direction) to
+ * "up-screen / away from viewer". Absolute compass heading is shown in
+ * the text readout, not the model.
  */
-BBLAttitude3D.rollPitchOnlyQuaternion = function (rollDeg, pitchDeg) {
+BBLAttitude3D.eulerQuaternion = function (rollDeg, pitchDeg, yawDeg) {
   const rollRad = (rollDeg * Math.PI) / 180;
   const pitchRad = (pitchDeg * Math.PI) / 180;
+  const yawRad = (yawDeg * Math.PI) / 180;
 
   const qRoll = { x: Math.sin(rollRad / 2), y: 0, z: 0, w: Math.cos(rollRad / 2) };
   const qPitch = { x: 0, y: Math.sin(pitchRad / 2), z: 0, w: Math.cos(pitchRad / 2) };
+  const qYaw = { x: 0, y: 0, z: Math.sin(yawRad / 2), w: Math.cos(yawRad / 2) };
 
-  return BBLAttitude3D.multiplyQuaternions(qPitch, qRoll);
+  return BBLAttitude3D.multiplyQuaternions(qYaw, BBLAttitude3D.multiplyQuaternions(qPitch, qRoll));
 };
 
 /**
