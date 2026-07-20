@@ -34,7 +34,12 @@ you don't need prior conversation history.
   `https://mtmag11.github.io/blackbox-analyzer/` next session.
 - [x] **Phase 1 — Flight Replay Dashboard**: DONE, confirmed working by
   owner against the real sample log. See "Phase 1 details" below.
-- [ ] Phase 2 — Vibration Spectrum Analyzer: not started.
+- [x] **Phase 2 — Vibration Spectrum Analyzer**: built and self-verified
+  (FFT correctness validated via `BBLFFT.selfTest()` against synthetic
+  known-frequency signals, and the whole pipeline run against the real
+  sample log programmatically - see "Phase 2 details" below), but not yet
+  manually confirmed by the owner in their own browser. Confirm next
+  session before treating this as fully closed.
 - [ ] Phase 3 — PID Tuning Analyzer: not started.
 - [ ] Phase 4 — Automatic Crash Detector: not started.
 - [ ] Phase 5 — Attitude Reconstruction: not started.
@@ -104,6 +109,51 @@ supported via `prefers-color-scheme`.
   including its reconstruction of the unlogged `w` component from the
   unit-quaternion constraint. This is the same method the official
   Betaflight viewer uses, not a novel derivation, so should be reliable.
+- Heading is unwrapped for display only (`unwrapDegrees()` in `app.js`) so
+  a genuine 360/0 crossing doesn't draw as a fake vertical spike. Verified
+  against the real log that a ~170deg heading change mid-flight renders as
+  a smooth ramp, not a jump - the unwrap function correctly left it alone
+  since it wasn't a wrap in that case.
+
+## Phase 2 details
+
+Added below the Phase 1 charts, one FFT-based "Vibration Spectrum" chart
+per gyro axis (Roll/Pitch/Yaw), using **`gyroUnfilt`** (not `gyroADC` -
+the FC's own filters already suppress the high-frequency content vibration
+analysis cares about, so the filtered signal would hide it).
+
+- `src/fft.js`: original code (not ported), a standard iterative
+  radix-2 Cooley-Tukey FFT + Welch's-method averaged power spectrum
+  (overlapping 2048-sample Hann-windowed segments, 50% overlap) + simple
+  local-maxima peak picking (must be >=6dB above the local median to
+  count as a peak).
+- Correctness is validated by `BBLFFT.selfTest()`: builds a synthetic
+  signal from two known frequencies (100Hz, 450Hz), runs it through the
+  whole pipeline, and asserts the detected peaks land within one FFT bin
+  of the true frequency. Passed. Not wired into the UI (it's a dev-time
+  correctness check, not a user feature) - call it from the browser
+  console if `src/fft.js` is ever modified.
+- Full pipeline (decode -> `gyroUnfilt` -> FFT -> peak-pick) also run
+  against the real sample log programmatically: sane output (8000Hz
+  sample rate matching the 125us looptime, 150 averaged windows, a broad
+  ~700-1000Hz hump on all three axes consistent with real prop/motor
+  noise, one low-frequency (~8-12Hz) peak per axis consistent with normal
+  flight dynamics).
+
+### Confidence notes (Phase 2)
+
+- **Peak frequency labels are general FPV-community heuristic ranges,
+  explicitly hedged, not a diagnosis.** This log has no motor RPM/eRPM
+  telemetry field, so a peak can't be attributed to a specific motor or
+  harmonic with any confidence - `BBLFFT.describeFrequencyRange()` says
+  so in its own output text (e.g. "unconfirmed - no RPM telemetry in this
+  log"). If a future log ever has bidirectional DShot RPM data, this
+  should be revisited - real RPM would let peaks be attributed to actual
+  motor harmonics with much higher confidence.
+- The FFT math itself (the actual signal processing) is standard,
+  self-tested, and not speculative - the uncertainty is entirely in the
+  frequency-to-cause interpretation layer on top of it, which is exactly
+  where the hedging is applied.
 
 ## Decoder architecture & licensing (important — read before touching src/)
 
@@ -149,6 +199,7 @@ project with no commercial angle, GPL-3.0 has no practical downside.
   decoders.js       "tag group" field decoders (ported)
   decoder.js        FlightLogParser - the main decoder (ported, trimmed)
   units.js          unit conversion formulas (ported, trimmed - see above)
+  fft.js            FFT + vibration spectrum analysis (original, self-tested)
   charts.js         uPlot chart-creation helper (original)
   app.js            dataset builder + dashboard orchestration (original)
 /logs/              Sample .bbl files (safe, no location data)
@@ -159,18 +210,26 @@ NOTICE.md           Attribution details for the ported code
 ```
 
 Load order in `index.html` matters: uPlot CDN -> tools.js -> datastream.js
--> decoders.js -> decoder.js -> units.js -> charts.js -> app.js (each
-later file depends on globals defined by the ones before it).
+-> decoders.js -> decoder.js -> units.js -> fft.js -> charts.js -> app.js
+(each later file depends on globals defined by the ones before it).
 
 ## Open issues / things to know for next session
 
 - **Confirm GitHub Pages live URL loads** (`https://mtmag11.github.io/
   blackbox-analyzer/`) - blocked on a GitHub platform outage during Phase
-  0, should be resolved by now but wasn't re-checked after Phase 1 work
+  0, should be resolved by now but wasn't re-checked after Phase 1/2 work
   started.
+- **Phase 2 needs the owner's manual confirmation** in their own browser
+  (it was only verified programmatically this session - see Phase 2
+  details above for exactly what was checked).
 - rcCommand and PID terms are raw units, not real-world units (see
   confidence notes above) - fine for now, revisit if Phase 3 (PID tuning
   analyzer) needs real units for its symptom descriptions.
 - No performance profiling done yet on very long flights (this sample was
-  ~19 seconds of active flight data across 155k frames and rendered fine;
-  haven't tested a 5+ minute flight).
+  ~1m17s of flight data across 155k frames and rendered fine; haven't
+  tested a 5+ minute flight).
+- The dev preview browser tool used during this session cached `src/*.js`
+  files across edits within the same tab (stale globals after a file
+  edit) - closing and reopening the tab fixed it. Not a real bug in the
+  site; just a note in case a future session hits the same confusing
+  symptom while testing.

@@ -41,10 +41,9 @@ BBLCharts.createLineChart = function (container, title, xData, seriesDefs, opts)
 
   const gridColor = cssVar("--grid");
   const axisColor = cssVar("--axis");
-  const textColor = cssVar("--text-secondary");
 
   const series = [
-    { label: "time (s)" },
+    { label: opts.xLabel || "time (s)" },
     ...seriesDefs.map((s) => ({
       label: s.label,
       stroke: BBLCharts.seriesColor(s.slot),
@@ -64,7 +63,7 @@ BBLCharts.createLineChart = function (container, title, xData, seriesDefs, opts)
       { stroke: axisColor, grid: { stroke: gridColor }, ticks: { stroke: axisColor } },
     ],
     scales: { x: { time: false } },
-    cursor: { sync: { key: "bbl-sync" } },
+    cursor: { sync: { key: opts.syncKey || "bbl-sync" } },
     legend: { live: true },
   };
 
@@ -74,6 +73,13 @@ BBLCharts.createLineChart = function (container, title, xData, seriesDefs, opts)
   window.addEventListener("resize", () => {
     u.setSize({ width: Math.max(wrap.clientWidth - 24, 300), height: opts.height || 200 });
   });
+
+  if (opts.footerHtml) {
+    const footer = document.createElement("div");
+    footer.className = "chart-footer";
+    footer.innerHTML = opts.footerHtml;
+    wrap.appendChild(footer);
+  }
 
   return u;
 };

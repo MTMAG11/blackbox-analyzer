@@ -4,6 +4,20 @@
  * and unit conversions (units.js) into charts (charts.js).
  */
 
+function unwrapDegrees(arr) {
+  const out = new Array(arr.length);
+  if (arr.length === 0) return out;
+  let offset = 0;
+  out[0] = arr[0];
+  for (let i = 1; i < arr.length; i++) {
+    const diff = arr[i] - arr[i - 1];
+    if (diff > 180) offset -= 360;
+    else if (diff < -180) offset += 360;
+    out[i] = arr[i] + offset;
+  }
+  return out;
+}
+
 function findLogSegments(bytes) {
   const marker = FlightLogParser.prototype.FLIGHT_LOG_START_MARKER;
   const starts = [];
@@ -230,14 +244,76 @@ function renderDashboard(ds) {
 
   // 6. Attitude (orientation only - no GPS, no spatial position)
   if (ds.hasQuat) {
+    // Heading is stored as 0-360deg; unwrap just for the chart so a normal
+    // rotation through north doesn't draw as a fake vertical spike.
     BBLCharts.createLineChart(chartsRoot, "Attitude - orientation only, not position (deg)", ds.t, [
       { label: "Roll", slot: 1, data: ds.attRoll },
       { label: "Pitch", slot: 2, data: ds.attPitch },
-      { label: "Heading", slot: 3, data: ds.attHeading },
+      { label: "Heading", slot: 3, data: unwrapDegrees(ds.attHeading) },
     ]);
   }
 
+  // 7. Vibration spectrum (gyroUnfilt only - filtered gyro has already had
+  // this content suppressed by the FC's own filters)
+  if (ds.hasGyroUnfilt) {
+    renderSpectrumSection(chartsRoot, ds);
+  }
+
   el("main").classList.add("visible");
+}
+
+function peaksFooterHtml(peaks) {
+  if (peaks.length === 0) {
+    return "<i>No prominent peaks above the noise floor.</i>";
+  }
+  const items = peaks
+    .map(
+      (p) =>
+        `<li><b>${p.freq.toFixed(1)} Hz</b> (${p.magnitudeDb.toFixed(1)} dB, +${p.prominenceDb.toFixed(1)} dB above local floor) &mdash; ${BBLFFT.describeFrequencyRange(p.freq)}</li>`,
+    )
+    .join("");
+  return `<div>Flagged peaks (loudest first):</div><ul>${items}</ul>`;
+}
+
+function renderSpectrumSection(chartsRoot, ds) {
+  const heading = document.createElement("h2");
+  heading.textContent = "Vibration Spectrum (unfiltered gyro)";
+  heading.style.fontSize = "0.95rem";
+  heading.style.margin = "1.5rem 0 0.25rem";
+  chartsRoot.appendChild(heading);
+
+  const note = document.createElement("p");
+  note.className = "subtitle";
+  note.style.margin = "0 0 0.75rem";
+  note.textContent =
+    "FFT of raw (unfiltered) gyro per axis. Peak frequency labels below are general FPV-community heuristics, not a diagnosis - this log has no motor RPM telemetry, so a peak can't be attributed to a specific motor or harmonic with confidence.";
+  chartsRoot.appendChild(note);
+
+  const sampleRateHz = 1e6 / ds.sysConfig.looptime;
+  const axisNames = ["Roll", "Pitch", "Yaw"];
+
+  for (let axis = 0; axis < 3; axis++) {
+    const spectrum = BBLFFT.averagedPowerSpectrum(ds.gyroUnfilt[axis], sampleRateHz, 2048);
+    const maxDisplayHz = 2000;
+    let cutoff = spectrum.freqs.length;
+    for (let i = 0; i < spectrum.freqs.length; i++) {
+      if (spectrum.freqs[i] > maxDisplayHz) {
+        cutoff = i;
+        break;
+      }
+    }
+    const freqs = spectrum.freqs.slice(0, cutoff);
+    const magnitudeDb = spectrum.magnitudeDb.slice(0, cutoff);
+    const peaks = BBLFFT.findPeaks(freqs, magnitudeDb, { minFreq: 5, maxFreq: maxDisplayHz, maxPeaks: 5 });
+
+    BBLCharts.createLineChart(
+      chartsRoot,
+      `${axisNames[axis]} Gyro Vibration Spectrum (dB vs Hz)`,
+      freqs,
+      [{ label: `${axisNames[axis]} magnitude`, slot: axis + 1, data: magnitudeDb }],
+      { xLabel: "frequency (Hz)", syncKey: "bbl-sync-freq", footerHtml: peaksFooterHtml(peaks) },
+    );
+  }
 }
 
 function loadSegment(bytes, segments, segmentIndex) {
