@@ -50,6 +50,37 @@ BBLAttitude3D.quaternionToCssMatrix3d = function (q) {
   return `matrix3d(${r00},${r10},${r20},0,${r01},${r11},${r21},0,${r02},${r12},${r22},0,0,0,0,1)`;
 };
 
+BBLAttitude3D.multiplyQuaternions = function (a, b) {
+  return {
+    x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+    y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+    z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+    w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+  };
+};
+
+/**
+ * Build a quaternion from roll and pitch only (heading/yaw excluded).
+ * Used for a "chase-cam" style display: the model's nose stays roughly
+ * forward-facing regardless of which compass direction the aircraft was
+ * actually pointing - only bank (roll) and nose-up/down (pitch) are shown
+ * visually, heading is read off the text readout instead. This is a
+ * deliberate choice (owner preference, not a bug): the earlier version
+ * applied the full quaternion including yaw, which correctly reproduced a
+ * fixed third-person view but visually spun the model's nose toward/away
+ * from the viewer during turns - less intuitive for reviewing a flight
+ * than seeing yaw only as a number.
+ */
+BBLAttitude3D.rollPitchOnlyQuaternion = function (rollDeg, pitchDeg) {
+  const rollRad = (rollDeg * Math.PI) / 180;
+  const pitchRad = (pitchDeg * Math.PI) / 180;
+
+  const qRoll = { x: Math.sin(rollRad / 2), y: 0, z: 0, w: Math.cos(rollRad / 2) };
+  const qPitch = { x: 0, y: Math.sin(pitchRad / 2), z: 0, w: Math.cos(pitchRad / 2) };
+
+  return BBLAttitude3D.multiplyQuaternions(qPitch, qRoll);
+};
+
 /**
  * Self-test: for a set of test quaternions (including simple known
  * rotations and the identity), decompose quaternionToCssMatrix3d()'s

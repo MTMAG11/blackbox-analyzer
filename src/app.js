@@ -514,7 +514,7 @@ function renderAttitude3DSection(chartsRoot, ds) {
   const note = document.createElement("p");
   note.className = "diagram-note";
   note.textContent =
-    "Orientation shown, not position - no GPS in this log. The rotation math is self-tested and matches the Attitude chart above exactly, but the specific 3D visual mapping (which screen direction is \"forward\") hasn't been checked against real footage of this flight, since none exists to check against - treat the shape as a rough guide to attitude, not a precise replay.";
+    "Orientation shown, not position - no GPS in this log. Chase-cam style: the model's nose stays roughly forward-facing and only banks (roll) and tilts (pitch) - heading/yaw is shown as a number below rather than spinning the model, since watching it swing toward or away from you on every turn was less intuitive than reading the heading directly. Roll/pitch math is self-tested and matches the Attitude chart above exactly - treat the shape as a rough guide, not a precise replay.";
   wrap.appendChild(note);
 
   const armStyle = "width:65px;height:3px;background:var(--axis);transform-origin:0 50%;";
@@ -552,7 +552,10 @@ function renderAttitude3DSection(chartsRoot, ds) {
   const readoutEl = scene.querySelector("#attitude3dReadout");
 
   const applyFrame = (i) => {
-    const q = { x: ds.attQuat.x[i], y: ds.attQuat.y[i], z: ds.attQuat.z[i], w: ds.attQuat.w[i] };
+    // Chase-cam style: nose stays roughly forward-facing, only roll/pitch
+    // drive the visual rotation - heading is read off the text below
+    // instead of spinning the model (owner preference).
+    const q = BBLAttitude3D.rollPitchOnlyQuaternion(ds.attRoll[i], ds.attPitch[i]);
     droneEl.style.transform = BBLAttitude3D.quaternionToCssMatrix3d(q);
     seekEl.value = i;
     readoutEl.textContent = `t=${ds.t[i].toFixed(1)}s   roll=${ds.attRoll[i].toFixed(0)}°   pitch=${ds.attPitch[i].toFixed(0)}°   heading=${ds.attHeading[i].toFixed(0)}°`;
