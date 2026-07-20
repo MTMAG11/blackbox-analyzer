@@ -24,8 +24,13 @@ you don't need prior conversation history.
 
 ## Phase status
 
-- [x] **Phase 0 — Foundation + Decoder**: DONE, verified against a real
-  log (see "Decoder verification" below).
+- [x] **Phase 0 — Foundation + Decoder**: core work DONE, verified against
+  a real log (see "Decoder verification" below). One open item: GitHub
+  Pages live URL not yet confirmed loading (GitHub had a platform-wide
+  Actions/Pages outage on 2026-07-19 that caused 3 build failures; repo
+  and Pages config are correct, just waiting on GitHub's infra to catch
+  up). Check `https://mtmag11.github.io/blackbox-analyzer/` next session
+  and confirm it loads before fully closing Phase 0.
 - [ ] Phase 1 — Flight Replay Dashboard: not started.
 - [ ] Phase 2 — Vibration Spectrum Analyzer: not started.
 - [ ] Phase 3 — PID Tuning Analyzer: not started.
