@@ -23,6 +23,41 @@ BBLCharts.seriesColor = function (slot) {
 const allCharts = [];
 
 /**
+ * uPlot's default legend toggle dims the whole row to 30% opacity when a
+ * series is hidden, which reads as "something's wrong" rather than "off".
+ * Replace that with a checkbox-style marker instead: filled + checkmark
+ * when the series is showing (the default), hollow when hidden - and
+ * leave the label text at full opacity either way.
+ */
+function enhanceLegendCheckboxes(u) {
+  const legend = u.root.querySelector(".u-legend");
+  if (!legend) return;
+
+  const rows = legend.querySelectorAll("tr.u-series");
+  rows.forEach((row, i) => {
+    if (i === 0) return; // row 0 is the x-axis label, not a toggleable series
+    const marker = row.querySelector(".u-marker");
+    if (!marker) return;
+
+    const color = marker.style.borderColor;
+
+    const check = document.createElement("div");
+    check.className = "u-marker-check";
+    check.textContent = "✓";
+    marker.appendChild(check);
+
+    const applyState = () => {
+      const isOff = row.classList.contains("u-off");
+      marker.style.backgroundColor = isOff ? "transparent" : color;
+      check.style.visibility = isOff ? "hidden" : "visible";
+    };
+    applyState();
+
+    new MutationObserver(applyState).observe(row, { attributes: true, attributeFilter: ["class"] });
+  });
+}
+
+/**
  * seriesDefs: [{ label, slot (1-based color slot), data, dashed (bool) }]
  */
 BBLCharts.createLineChart = function (container, title, xData, seriesDefs, opts) {
@@ -69,6 +104,7 @@ BBLCharts.createLineChart = function (container, title, xData, seriesDefs, opts)
 
   const u = new uPlot(uOpts, [xData, ...seriesDefs.map((s) => s.data)], plotDiv);
   allCharts.push(u);
+  enhanceLegendCheckboxes(u);
 
   window.addEventListener("resize", () => {
     u.setSize({ width: Math.max(wrap.clientWidth - 24, 300), height: opts.height || 200 });

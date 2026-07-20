@@ -91,6 +91,28 @@
     text-align: right;
     font-variant-numeric: tabular-nums;
   }
+  /* Checkbox-style series toggle: filled + checkmark = showing (default),
+     hollow = hidden. Replaces uPlot's default "dim the whole row" toggle,
+     which read as an error state rather than an off switch. Label text
+     stays full opacity regardless of state (see enhanceLegendCheckboxes
+     in charts.js, which also cancels the opacity dimming below). */
+  .u-legend .u-off > * { opacity: 1 !important; }
+  .u-legend .u-marker {
+    position: relative;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .u-legend .u-marker-check {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 0.75em;
+    line-height: 1;
+    pointer-events: none;
+  }
   .chart-footer { font-size: 0.78rem; color: var(--text-secondary); padding: 0.4rem 0 0.5rem; }
   .chart-footer ul { margin: 0.3rem 0 0; padding-left: 1.2rem; }
   .chart-footer li { margin-bottom: 0.2rem; }
