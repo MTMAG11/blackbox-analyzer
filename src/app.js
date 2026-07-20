@@ -194,6 +194,12 @@ function renderDashboard(ds) {
   const chartsRoot = el("charts");
   chartsRoot.innerHTML = "";
 
+  // Charts measure their container's clientWidth when created, which reads
+  // as 0 while an ancestor is display:none - so main must become visible
+  // BEFORE any chart is built, not after (that was the earlier bug causing
+  // every chart to fall back to a fixed 300px width in a full-width panel).
+  el("main").classList.add("visible");
+
   renderInfoPanel(ds);
 
   // 1. Stick & throttle inputs
@@ -234,12 +240,14 @@ function renderDashboard(ds) {
     [{ label: "vbat", slot: 1, data: ds.vbat }],
   );
 
-  // 5. Motor outputs
+  // 5. Motor outputs (labeled 1-4 to match Betaflight's own motor numbering,
+  // even though the log field names and ds.motor[] are 0-indexed internally)
+  renderMotorLayoutDiagram(chartsRoot);
   BBLCharts.createLineChart(chartsRoot, "Motor Outputs (raw)", ds.t, [
-    { label: "Motor 0", slot: 1, data: ds.motor[0] },
-    { label: "Motor 1", slot: 2, data: ds.motor[1] },
-    { label: "Motor 2", slot: 3, data: ds.motor[2] },
-    { label: "Motor 3", slot: 4, data: ds.motor[3] },
+    { label: "Motor 1", slot: 1, data: ds.motor[0] },
+    { label: "Motor 2", slot: 2, data: ds.motor[1] },
+    { label: "Motor 3", slot: 3, data: ds.motor[2] },
+    { label: "Motor 4", slot: 4, data: ds.motor[3] },
   ]);
 
   // 6. Attitude (orientation only - no GPS, no spatial position)
@@ -258,8 +266,6 @@ function renderDashboard(ds) {
   if (ds.hasGyroUnfilt) {
     renderSpectrumSection(chartsRoot, ds);
   }
-
-  el("main").classList.add("visible");
 }
 
 function peaksFooterHtml(peaks) {
@@ -273,6 +279,54 @@ function peaksFooterHtml(peaks) {
     )
     .join("");
   return `<div>Flagged peaks (loudest first):</div><ul>${items}</ul>`;
+}
+
+/**
+ * Small top-down motor layout diagram. Uses the standard Betaflight Quad X
+ * motor numbering (1=rear right, 2=front right, 3=rear left, 4=front left)
+ * - verified against Betaflight community references, not assumed - but
+ * this is a generic diagram, not read from anything in the log itself
+ * (the log doesn't record physical motor position or frame geometry), so
+ * it won't be correct for a non-Quad-X frame or a custom motor remap.
+ */
+function renderMotorLayoutDiagram(container) {
+  const wrap = document.createElement("div");
+  wrap.className = "chart-panel";
+
+  const h = document.createElement("h3");
+  h.textContent = "Motor Layout (top-down, standard Quad X)";
+  wrap.appendChild(h);
+
+  const note = document.createElement("p");
+  note.className = "diagram-note";
+  note.textContent =
+    "Standard Betaflight Quad X motor numbering, matched to the colors in the chart below. This is not read from the log (it has no frame geometry data) - if your build uses a different frame or a custom motor remap, this won't match.";
+  wrap.appendChild(note);
+
+  const labelStroke = 'stroke="rgba(0,0,0,0.55)" stroke-width="3" paint-order="stroke fill"';
+  const svgWrap = document.createElement("div");
+  svgWrap.className = "motor-diagram";
+  svgWrap.innerHTML = `
+    <svg viewBox="0 0 200 200" width="180" height="180" role="img" aria-label="Top-down motor layout: motor 1 rear right, motor 2 front right, motor 3 rear left, motor 4 front left">
+      <line x1="100" y1="100" x2="146" y2="54" stroke="var(--axis)" stroke-width="3"/>
+      <line x1="100" y1="100" x2="146" y2="146" stroke="var(--axis)" stroke-width="3"/>
+      <line x1="100" y1="100" x2="54" y2="146" stroke="var(--axis)" stroke-width="3"/>
+      <line x1="100" y1="100" x2="54" y2="54" stroke="var(--axis)" stroke-width="3"/>
+      <circle cx="100" cy="100" r="16" fill="var(--surface-1)" stroke="var(--axis)" stroke-width="2"/>
+      <polygon points="100,16 88,40 112,40" fill="var(--text-secondary)"/>
+      <text x="100" y="10" text-anchor="middle" font-size="11" fill="var(--text-secondary)">FRONT</text>
+      <circle cx="146" cy="54" r="17" fill="var(--series-2)"/>
+      <text x="146" y="60" text-anchor="middle" font-size="15" font-weight="700" fill="#fff" ${labelStroke}>2</text>
+      <circle cx="146" cy="146" r="17" fill="var(--series-1)"/>
+      <text x="146" y="152" text-anchor="middle" font-size="15" font-weight="700" fill="#fff" ${labelStroke}>1</text>
+      <circle cx="54" cy="146" r="17" fill="var(--series-3)"/>
+      <text x="54" y="152" text-anchor="middle" font-size="15" font-weight="700" fill="#fff" ${labelStroke}>3</text>
+      <circle cx="54" cy="54" r="17" fill="var(--series-4)"/>
+      <text x="54" y="60" text-anchor="middle" font-size="15" font-weight="700" fill="#fff" ${labelStroke}>4</text>
+    </svg>
+  `;
+  wrap.appendChild(svgWrap);
+  container.appendChild(wrap);
 }
 
 function renderSpectrumSection(chartsRoot, ds) {

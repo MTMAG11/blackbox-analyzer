@@ -34,12 +34,11 @@ you don't need prior conversation history.
   `https://mtmag11.github.io/blackbox-analyzer/` next session.
 - [x] **Phase 1 — Flight Replay Dashboard**: DONE, confirmed working by
   owner against the real sample log. See "Phase 1 details" below.
-- [x] **Phase 2 — Vibration Spectrum Analyzer**: built and self-verified
-  (FFT correctness validated via `BBLFFT.selfTest()` against synthetic
-  known-frequency signals, and the whole pipeline run against the real
-  sample log programmatically - see "Phase 2 details" below), but not yet
-  manually confirmed by the owner in their own browser. Confirm next
-  session before treating this as fully closed.
+- [x] **Phase 2 — Vibration Spectrum Analyzer**: DONE. FFT correctness
+  validated via `BBLFFT.selfTest()` against synthetic known-frequency
+  signals; owner tested the whole dashboard in their own browser and
+  reported 3 issues (chart sizing, motor numbering, legend flicker), all
+  fixed - see "Phase 2 UI fixes" below.
 - [ ] Phase 3 — PID Tuning Analyzer: not started.
 - [ ] Phase 4 — Automatic Crash Detector: not started.
 - [ ] Phase 5 — Attitude Reconstruction: not started.
@@ -155,6 +154,42 @@ analysis cares about, so the filtered signal would hide it).
   frequency-to-cause interpretation layer on top of it, which is exactly
   where the hedging is applied.
 
+## Phase 2 UI fixes (from owner's real-browser testing)
+
+- **Chart width bug**: every chart rendered as a fixed 300px square inside
+  a full-width panel. Root cause: `BBLCharts.createLineChart` measures
+  `container.clientWidth` at creation time, but charts were being built
+  while the `<main>` ancestor still had `display:none` (visibility was
+  only toggled on *after* all charts were created) - and `clientWidth`
+  reads as 0 on anything inside a `display:none` ancestor, so every chart
+  fell back to `Math.max(0-24, 300)` = 300px. Fixed by moving
+  `el("main").classList.add("visible")` to the top of `renderDashboard()`,
+  before any chart is built. Verified: canvas now measures ~887px in an
+  ~898px panel instead of a fixed 300px.
+- **Motor numbering**: charts labeled motors 0-3 (matching the raw log
+  field names `motor[0..3]`), but Betaflight's own convention (shown in
+  its Configurator, and what the owner expects) numbers them 1-4. Chart
+  labels changed to "Motor 1"-"Motor 4"; the underlying field indices
+  (`ds.motor[0..3]`) are unchanged, only the display label shifted.
+- **Motor layout diagram added**: a small top-down SVG diagram next to
+  the Motor Outputs chart, showing the standard Betaflight Quad X motor
+  positions (1=rear right, 2=front right, 3=rear left, 4=front left,
+  verified against community references - see git log for this commit)
+  with a "FRONT" arrow, colored to match each motor's chart series color.
+  Explicitly labeled as *not* read from the log (it has no frame geometry
+  data) and won't be correct for a non-Quad-X frame or custom motor remap
+  - this is a generic reference diagram, not derived from this specific
+  aircraft.
+- **Legend flicker fixed**: uPlot's live legend uses `display:inline-block`
+  text whose width changes with digit count as the cursor moves, which
+  was pushing the legend across the 1-line/2-line wrap threshold rapidly
+  and causing visible jitter. Fixed with CSS (`.u-legend .u-value {
+  min-width: 5.5em; text-align: right; font-variant-numeric:
+  tabular-nums; }`) - pins the value column width so wrap state no longer
+  depends on the displayed number's digit count. Verified: legend height
+  stayed exactly constant across 20 simulated cursor positions swept
+  across a chart (previously would have varied).
+
 ## Decoder architecture & licensing (important — read before touching src/)
 
 `src/tools.js`, `src/datastream.js`, `src/decoders.js`, `src/decoder.js`,
@@ -216,12 +251,17 @@ Load order in `index.html` matters: uPlot CDN -> tools.js -> datastream.js
 ## Open issues / things to know for next session
 
 - **Confirm GitHub Pages live URL loads** (`https://mtmag11.github.io/
-  blackbox-analyzer/`) - blocked on a GitHub platform outage during Phase
-  0, should be resolved by now but wasn't re-checked after Phase 1/2 work
-  started.
-- **Phase 2 needs the owner's manual confirmation** in their own browser
-  (it was only verified programmatically this session - see Phase 2
-  details above for exactly what was checked).
+  blackbox-analyzer/`) - as of this session, still blocked on an ongoing
+  GitHub platform-wide Actions outage (not a repo config issue - GitHub's
+  own status page confirmed it, still unresolved after 2.5+ hours across
+  multiple check-ins). Nothing to do here but wait for GitHub and check
+  again; every deploy attempt so far has failed at startup, gotten stuck
+  queued, or been auto-cancelled by a newer push superseding it.
+- **Motor layout diagram assumes a standard Quad X frame** with stock
+  Betaflight motor numbering - it's a generic reference diagram, not read
+  from the log. If the owner's frame is a different layout or has a
+  custom motor remap, this diagram would need to become configurable
+  (not worth building until/unless it's actually wrong for their setup).
 - rcCommand and PID terms are raw units, not real-world units (see
   confidence notes above) - fine for now, revisit if Phase 3 (PID tuning
   analyzer) needs real units for its symptom descriptions.
