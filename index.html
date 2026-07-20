@@ -19,6 +19,10 @@
     --series-2: #008300; /* green */
     --series-3: #e87ba4; /* magenta */
     --series-4: #eda100; /* yellow */
+    /* Status palette: fixed, never themed, reserved for severity - never
+       reused as a series color. */
+    --status-critical: #d03b3b;
+    --status-warning: #fab219;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -118,6 +122,21 @@
   .chart-footer li { margin-bottom: 0.2rem; }
   .diagram-note { font-size: 0.78rem; color: var(--text-secondary); margin: 0 0 0.5rem; max-width: 40em; }
   .motor-diagram { display: flex; justify-content: center; padding: 0.25rem 0 0.5rem; }
+  .finding-list { list-style: none; margin: 0; padding: 0; }
+  .finding-list li {
+    display: flex; gap: 0.6rem; align-items: baseline;
+    padding: 0.5rem 0; border-top: 1px solid var(--border);
+    font-size: 0.85rem; color: var(--text-secondary);
+  }
+  .finding-list li:first-child { border-top: none; }
+  .finding-badge {
+    flex: 0 0 auto; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.02em;
+    padding: 0.15rem 0.45rem; border-radius: 4px; text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .finding-badge.high { background: var(--status-critical); color: #fff; }
+  .finding-badge.medium { background: var(--status-warning); color: #1a1a19; }
+  .finding-badge.info { background: transparent; color: var(--text-muted); border: 1px solid var(--border); }
   .placeholder { padding: 4rem 1.5rem; text-align: center; color: var(--text-secondary); }
 </style>
 </head>
@@ -152,6 +171,7 @@
 <script src="src/units.js"></script>
 <script src="src/fft.js"></script>
 <script src="src/pidanalysis.js"></script>
+<script src="src/crashdetect.js"></script>
 <script src="src/charts.js"></script>
 <script src="src/app.js"></script>
 <script>

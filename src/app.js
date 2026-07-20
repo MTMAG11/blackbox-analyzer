@@ -66,6 +66,7 @@ function buildDataset(bytes, segment) {
     attPitch = [],
     attHeading = [];
   const frameCount = { I: 0, P: 0, S: 0, E: 0 };
+  const disarmEvents = []; // [{ timeSec, reason }]
 
   let idx = null;
   let hasGyroUnfilt = false;
@@ -73,15 +74,27 @@ function buildDataset(bytes, segment) {
   let hasSetpoint = false;
   let vbatIsVolts = false;
   let t0 = null;
+  let lastKnownTime = null;
 
   parser.onFrameReady = (valid, frame, frameType) => {
     if (!valid) return;
     frameCount[frameType] = (frameCount[frameType] || 0) + 1;
 
+    if (frameType === "E") {
+      // Event frames carry no timestamp of their own; tag with the most
+      // recently seen main-frame time as an approximation (events are
+      // interleaved close to nearby I/P frames in the byte stream).
+      if (frame.event === FlightLogEvent.DISARM && lastKnownTime !== null) {
+        disarmEvents.push({ timeSec: (lastKnownTime - t0) / 1e6, reason: frame.data.reason });
+      }
+      return;
+    }
+
     if (frameType !== "I" && frameType !== "P") return;
 
     const time = frame[idx.time];
     if (t0 === null) t0 = time;
+    lastKnownTime = time;
     t.push((time - t0) / 1e6);
 
     for (let axis = 0; axis < 4; axis++) {
@@ -174,6 +187,7 @@ function buildDataset(bytes, segment) {
     attRoll,
     attPitch,
     attHeading,
+    disarmEvents,
   };
 }
 
@@ -281,6 +295,49 @@ function renderDashboard(ds) {
   if (ds.hasSetpoint) {
     renderPidAnalysisSection(chartsRoot, ds);
   }
+
+  // 9. Crash / anomaly detection: ranked possibilities, never a diagnosis
+  renderCrashSection(chartsRoot, ds);
+}
+
+function confidenceBadgeHtml(confidence) {
+  const labels = { high: "High confidence", medium: "Possible", info: "Info" };
+  return `<span class="finding-badge ${confidence}">${labels[confidence] ?? confidence}</span>`;
+}
+
+function renderCrashSection(chartsRoot, ds) {
+  const wrap = document.createElement("div");
+  wrap.className = "chart-panel";
+
+  const h = document.createElement("h3");
+  h.textContent = "Crash / Anomaly Detection";
+  wrap.appendChild(h);
+
+  const note = document.createElement("p");
+  note.className = "diagram-note";
+  note.textContent =
+    "Ranked possibilities, not a diagnosis. “High confidence” only applies to Betaflight's own onboard crash/runaway detection reporting itself via the disarm reason - everything else is a heuristic that can have false positives. Motor “desync” specifically isn't detected: this log has no RPM/eRPM telemetry, so there's no reliable way to tell commanded motor output apart from an actual mechanical failure.";
+  wrap.appendChild(note);
+
+  const findings = BBLCrashDetect.analyze(ds);
+
+  const list = document.createElement("ul");
+  list.className = "finding-list";
+
+  if (findings.length === 0) {
+    const li = document.createElement("li");
+    li.innerHTML = "<span>No crash or anomaly indicators found in this flight.</span>";
+    list.appendChild(li);
+  } else {
+    for (const f of findings) {
+      const li = document.createElement("li");
+      li.innerHTML = `${confidenceBadgeHtml(f.confidence)}<span>${f.description}</span>`;
+      list.appendChild(li);
+    }
+  }
+
+  wrap.appendChild(list);
+  chartsRoot.appendChild(wrap);
 }
 
 function renderPidAnalysisSection(chartsRoot, ds) {

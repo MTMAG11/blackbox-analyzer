@@ -39,14 +39,18 @@ you don't need prior conversation history.
   signals; owner tested the whole dashboard in their own browser and
   reported 3 issues (chart sizing, motor numbering, legend flicker), all
   fixed - see "Phase 2 UI fixes" below.
-- [x] **Phase 3 — PID Tuning Analyzer**: built and self-verified (step-
-  response detection validated via `BBLPidAnalysis.selfTest()` against a
-  synthetic underdamped 2nd-order response with analytically known
-  overshoot % and settling time; full pipeline also run against the real
-  sample log and produced sane, plausible numbers - see "Phase 3 details"
-  below), but not yet manually confirmed by the owner in their own
-  browser. Confirm next session before treating this as fully closed.
-- [ ] Phase 4 — Automatic Crash Detector: not started.
+- [x] **Phase 3 — PID Tuning Analyzer**: DONE. Step-response detection
+  validated via `BBLPidAnalysis.selfTest()` against a synthetic
+  underdamped 2nd-order response with analytically known overshoot % and
+  settling time; owner confirmed it looks right in their own browser
+  against the real sample log. See "Phase 3 details" below.
+- [x] **Phase 4 — Automatic Crash Detector**: built and self-verified
+  (detectors validated via `BBLCrashDetect.selfTest()` against synthetic
+  data with known spike/dropout events; full pipeline also run against
+  the real sample log - correctly found zero false positives on what was
+  a normal flight, just one "SWITCH" disarm classified as informational,
+  not concerning - see "Phase 4 details" below), but not yet manually
+  confirmed by the owner in their own browser.
 - [ ] Phase 5 — Attitude Reconstruction: not started.
 - [ ] Phase 6 — AI Flight Coach (exploratory, not committed): not started.
 - [ ] Phase 7 — Integrated Platform: not started, not designed.
@@ -274,6 +278,66 @@ summary of detected step-response symptoms underneath each chart.
   (could also be pilot input, turbulence, or something unrelated)" -
   this is intentional, not a hedge to remove later.
 
+## Phase 4 details
+
+Added a "Crash / Anomaly Detection" panel (text list, not a chart - the
+output is discrete ranked findings, not a continuous signal) at the
+bottom of the dashboard.
+
+- `src/crashdetect.js`: original code, except `DISARM_REASON_NAMES` which
+  is transcribed directly from the real upstream source
+  (`flightlog_fielddefs.js`'s `FLIGHT_LOG_DISARM_REASON`), not guessed.
+  Four detectors, most to least authoritative:
+  1. **DISARM reason check** - Betaflight logs *why* it disarmed via an
+     event frame. If the reason is `CRASH_PROTECTION` or
+     `RUNAWAY_TAKEOFF`, that's the flight controller's own onboard
+     detection reporting itself, not an inference by this tool - marked
+     "high confidence". Any other reason (STICKS, SWITCH, FAILSAFE, etc.)
+     is normal and shown as "info", not a symptom.
+  2. **Gyro spikes** - any axis exceeding 1500deg/s, heuristic threshold,
+     "medium confidence" (physically possible during hard flying, not
+     just crashes, though 1500deg/s is well beyond normal even
+     aggressive acro).
+  3. **Motor dropouts** - all 4 motors dropping from active to near-idle
+     within ~60ms with no nearby disarm event, "medium confidence"
+     (possible power interruption, but a hard throttle chop can look
+     similar).
+  4. **Abrupt log end** - log ends with motors still active and no
+     disarm recorded, "medium confidence" (possible sudden power loss
+     before the FC could log its own disarm, but could just be a partial
+     log file).
+- **Explicitly NOT implemented: motor "desync" detection.** This log has
+  no RPM/eRPM telemetry (no bidirectional DShot data), so there's no way
+  to compare commanded motor output against actual motor speed - a
+  "desync detector" built from commanded output alone would mostly be
+  guessing. Flagged here and in the UI rather than shipped as a fake-
+  confident feature (per "tell me directly if something is less reliable
+  than expected, don't ship a degraded silent version").
+- To get event timing, `buildDataset()` (`app.js`) now also captures
+  DISARM event frames, tagged with the most recently seen main-frame time
+  as an approximation (event frames don't carry their own timestamp).
+
+### Confidence notes (Phase 4)
+
+- Validated with `BBLCrashDetect.selfTest()`: synthetic data with a known
+  gyro spike, a known motor dropout far from any disarm (must be
+  flagged), and a known motor dropout right next to a disarm (must NOT
+  be flagged, since that's just the FC intentionally cutting power).
+  Passed - detectors returned exactly the expected findings, none extra.
+- Full pipeline also run against the real sample log: correctly found
+  **zero false positives** on what was an uneventful flight - one
+  "SWITCH" disarm (normal, pilot-initiated), classified as informational
+  rather than a symptom, nothing else flagged. This is a meaningful
+  negative-case check, not just "it ran without crashing" - a detector
+  that flags everything as suspicious would be useless, and this one
+  didn't.
+- The heuristic thresholds (1500deg/s gyro spike, 300/60 motor active/
+  idle levels, 60ms dropout window) are reasonable first-pass values
+  chosen by reasoning about typical flight ranges, not tuned against a
+  labeled dataset of real crashes (none was available). If a future
+  session has access to a log from an actual known crash, re-verify
+  these thresholds catch it and adjust if needed.
+
 ## Decoder architecture & licensing (important — read before touching src/)
 
 `src/tools.js`, `src/datastream.js`, `src/decoders.js`, `src/decoder.js`,
@@ -320,6 +384,7 @@ project with no commercial angle, GPL-3.0 has no practical downside.
   units.js          unit conversion formulas (ported, trimmed - see above)
   fft.js            FFT + vibration spectrum analysis (original, self-tested)
   pidanalysis.js    step-response symptom detection (original, self-tested)
+  crashdetect.js    crash/anomaly detectors (original, self-tested)
   charts.js         uPlot chart-creation helper (original)
   app.js            dataset builder + dashboard orchestration (original)
 /logs/              Sample .bbl files (safe, no location data)
@@ -331,11 +396,16 @@ NOTICE.md           Attribution details for the ported code
 
 Load order in `index.html` matters: uPlot CDN -> tools.js -> datastream.js
 -> decoders.js -> decoder.js -> units.js -> fft.js -> pidanalysis.js ->
-charts.js -> app.js (each later file depends on globals defined by the
-ones before it).
+crashdetect.js -> charts.js -> app.js (each later file depends on globals
+defined by the ones before it).
 
 ## Open issues / things to know for next session
 
+- **Phase 4 needs the owner's manual confirmation** in their own browser
+  (only verified programmatically/self-tested this session).
+- **Motor "desync" detection is a known, explicitly-flagged gap** (Phase
+  4) - no RPM/eRPM telemetry in this log to detect it reliably. Revisit
+  only if a future log ever has bidirectional DShot data.
 - **Confirm GitHub Pages live URL loads** (`https://mtmag11.github.io/
   blackbox-analyzer/`) - as of this session, still blocked on an ongoing
   GitHub platform-wide Actions outage (not a repo config issue - GitHub's
@@ -343,11 +413,6 @@ ones before it).
   multiple check-ins). Nothing to do here but wait for GitHub and check
   again; every deploy attempt so far has failed at startup, gotten stuck
   queued, or been auto-cancelled by a newer push superseding it.
-- **Phase 3 needs the owner's manual confirmation** in their own browser
-  (only verified programmatically this session, same as Phase 2 was
-  before the owner tested it and found the 3 UI issues that got fixed -
-  worth specifically sanity-checking whether the flagged "oscillation"
-  events match what the flight actually felt like to fly).
 - **Motor layout diagram assumes a standard Quad X frame** with stock
   Betaflight motor numbering - it's a generic reference diagram, not read
   from the log. If the owner's frame is a different layout or has a
