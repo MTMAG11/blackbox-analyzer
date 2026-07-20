@@ -27,11 +27,10 @@ you don't need prior conversation history.
 
 - [x] **Phase 0 — Foundation + Decoder**: DONE, verified against a real
   log. GitHub repo created and pushed
-  (https://github.com/MTMAG11/blackbox-analyzer). One lingering open item:
-  GitHub Pages live URL not yet confirmed loading end-to-end — GitHub had
-  a platform-wide Actions/Pages outage on 2026-07-19 that caused the first
-  few build attempts to fail (not a repo config issue). Check
-  `https://mtmag11.github.io/blackbox-analyzer/` next session.
+  (https://github.com/MTMAG11/blackbox-analyzer). Live at
+  `https://mtmag11.github.io/blackbox-analyzer/` — confirmed loading
+  correctly (2026-07-20), after being blocked for a while by an unrelated
+  GitHub platform-wide Actions outage on 2026-07-19/20. Fully closed.
 - [x] **Phase 1 — Flight Replay Dashboard**: DONE, confirmed working by
   owner against the real sample log. See "Phase 1 details" below.
 - [x] **Phase 2 — Vibration Spectrum Analyzer**: DONE. FFT correctness
@@ -550,13 +549,6 @@ BBLPidAnalysis.computeError/detectStepEvents).
 - **Motor "desync" detection is a known, explicitly-flagged gap** (Phase
   4) - no RPM/eRPM telemetry in this log to detect it reliably. Revisit
   only if a future log ever has bidirectional DShot data.
-- **Confirm GitHub Pages live URL loads** (`https://mtmag11.github.io/
-  blackbox-analyzer/`) - as of this session, still blocked on an ongoing
-  GitHub platform-wide Actions outage (not a repo config issue - GitHub's
-  own status page confirmed it, still unresolved after 2.5+ hours across
-  multiple check-ins). Nothing to do here but wait for GitHub and check
-  again; every deploy attempt so far has failed at startup, gotten stuck
-  queued, or been auto-cancelled by a newer push superseding it.
 - **Motor layout diagram assumes a standard Quad X frame** with stock
   Betaflight motor numbering - it's a generic reference diagram, not read
   from the log. If the owner's frame is a different layout or has a
