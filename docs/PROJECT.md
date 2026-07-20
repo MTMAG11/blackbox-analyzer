@@ -653,6 +653,14 @@ first for BBLPidAnalysis.computeError/detectStepEvents).
 
 ## Open issues / things to know for next session
 
+- **Git history was rewritten once** (owner request): every commit's
+  `Co-Authored-By: Claude...` trailer was stripped via `git filter-branch
+  --msg-filter`, then force-pushed to `main`. All commit hashes from the
+  very first commit onward changed as a result - if any old hash is ever
+  referenced from outside this repo (an old conversation transcript, a
+  bookmark, etc.), it won't resolve. Commit *content* is unaffected, only
+  messages changed. Going forward, new commits should NOT include a
+  Co-Authored-By trailer, per this same request.
 - **Phase 6 and Phase 7 need the owner's manual confirmation** in their
   own browser (only self-tested/verified programmatically this session).
   For Phase 7 specifically: try the batch upload with a real folder of
