@@ -716,34 +716,51 @@ function renderAttitude3DSection(chartsRoot, ds) {
   wrap.className = "chart-panel";
 
   const h = document.createElement("h3");
-  h.textContent = "Attitude Reconstruction (3D, orientation only)";
+  h.textContent = "Attitude Reconstruction (3D) & Stick Position";
   wrap.appendChild(h);
 
   const note = document.createElement("p");
   note.className = "diagram-note";
   note.textContent =
-    "Orientation shown, not position - no GPS in this log. The model starts nose-away-from-viewer regardless of the actual compass direction at the start of the flight, then rotates left/right with yaw relative to that starting direction. Absolute compass heading is the number in the readout below. Roll/pitch math is self-tested and matches the Attitude chart above exactly - treat the shape as a rough guide, not a precise replay.";
+    "Orientation shown, not position - no GPS in this log. The model starts nose-away-from-viewer regardless of the actual compass direction at the start of the flight, then rotates left/right with yaw relative to that starting direction. Absolute compass heading is the number in the readout below. Roll/pitch math is self-tested and matches the Attitude chart above exactly - treat the shape as a rough guide, not a precise replay. The two squares show stick position (Mode 2 layout: left stick = yaw/throttle, right stick = roll/pitch) using the fixed -500..+500 / 1000..2000 ranges Betaflight logs rcCommand in, not this flight's own min/max - so the dot only reaches a corner on genuinely full stick deflection.";
   wrap.appendChild(note);
 
   const armStyle = "width:65px;height:3px;background:var(--axis);transform-origin:0 50%;";
+  const sticksHtml = ds.hasStick
+    ? `
+    <div class="stick-squares">
+      <div class="stick-square-wrap">
+        <div class="stick-square"><div class="stick-dot" id="stickDotLeft"></div></div>
+        <div class="stick-square-label">Yaw / Throttle</div>
+      </div>
+      <div class="stick-square-wrap">
+        <div class="stick-square"><div class="stick-dot" id="stickDotRight"></div></div>
+        <div class="stick-square-label">Roll / Pitch</div>
+      </div>
+    </div>`
+    : `<p class="diagram-note">No RC command (stick) data in this log - can't show stick position.</p>`;
+
   const scene = document.createElement("div");
   scene.className = "attitude3d-wrap";
   scene.innerHTML = `
-    <div class="attitude3d-scene">
-      <div class="attitude3d-camera">
-        <div class="attitude3d-drone" id="attitude3dDrone">
-          <div class="d3-arm" style="${armStyle}transform:rotate3d(0,0,1,135deg);"></div>
-          <div class="d3-arm" style="${armStyle}transform:rotate3d(0,0,1,45deg);"></div>
-          <div class="d3-arm" style="${armStyle}transform:rotate3d(0,0,1,-135deg);"></div>
-          <div class="d3-arm" style="${armStyle}transform:rotate3d(0,0,1,-45deg);"></div>
-          <div class="d3-motor" style="background:var(--series-1);transform:translate3d(-46px,46px,0);">1</div>
-          <div class="d3-motor" style="background:var(--series-2);transform:translate3d(46px,46px,0);">2</div>
-          <div class="d3-motor" style="background:var(--series-3);transform:translate3d(-46px,-46px,0);">3</div>
-          <div class="d3-motor" style="background:var(--series-4);transform:translate3d(46px,-46px,0);">4</div>
-          <div class="d3-nose" style="transform:translate3d(72px,0,0) rotate3d(0,0,1,90deg);"></div>
-          <div class="d3-hub"></div>
+    <div class="replay-visuals">
+      <div class="attitude3d-scene">
+        <div class="attitude3d-camera">
+          <div class="attitude3d-drone" id="attitude3dDrone">
+            <div class="d3-arm" style="${armStyle}transform:rotate3d(0,0,1,135deg);"></div>
+            <div class="d3-arm" style="${armStyle}transform:rotate3d(0,0,1,45deg);"></div>
+            <div class="d3-arm" style="${armStyle}transform:rotate3d(0,0,1,-135deg);"></div>
+            <div class="d3-arm" style="${armStyle}transform:rotate3d(0,0,1,-45deg);"></div>
+            <div class="d3-motor" style="background:var(--series-1);transform:translate3d(-46px,46px,0);">1</div>
+            <div class="d3-motor" style="background:var(--series-2);transform:translate3d(46px,46px,0);">2</div>
+            <div class="d3-motor" style="background:var(--series-3);transform:translate3d(-46px,-46px,0);">3</div>
+            <div class="d3-motor" style="background:var(--series-4);transform:translate3d(46px,-46px,0);">4</div>
+            <div class="d3-nose" style="transform:translate3d(72px,0,0) rotate3d(0,0,1,90deg);"></div>
+            <div class="d3-hub"></div>
+          </div>
         </div>
       </div>
+      ${sticksHtml}
     </div>
     <div class="attitude3d-controls">
       <button type="button" id="attitude3dPlay">Play</button>
@@ -758,6 +775,8 @@ function renderAttitude3DSection(chartsRoot, ds) {
   const playBtn = scene.querySelector("#attitude3dPlay");
   const seekEl = scene.querySelector("#attitude3dSeek");
   const readoutEl = scene.querySelector("#attitude3dReadout");
+  const stickDotLeft = scene.querySelector("#stickDotLeft");
+  const stickDotRight = scene.querySelector("#stickDotRight");
 
   // Heading for the visual is RELATIVE to the start of the flight: the
   // model begins nose-away-from-viewer no matter what compass direction
@@ -768,12 +787,33 @@ function renderAttitude3DSection(chartsRoot, ds) {
   // the readout text.
   const headingUnwrapped = unwrapDegrees(ds.attHeading);
 
+  // Fixed physical stick ranges (Betaflight's rcCommand encoding, not
+  // derived from this flight's own min/max - using the flight's range
+  // would make partial stick deflection look like it maxed out). Roll/
+  // pitch/yaw are -500..+500 centered on 0; throttle is the raw
+  // 1000..2000 PWM-style range centered on 1500. Confirmed against the
+  // real log: throttle hit exactly 1000 and 2000, roll/pitch/yaw stayed
+  // well inside +-500 - consistent with these being the real endpoints,
+  // not just what got flown.
+  const clampNorm = (value, center, halfRange) => Math.max(-1, Math.min(1, (value - center) / halfRange));
+
+  const positionDot = (dotEl, xNorm, yNorm) => {
+    if (!dotEl) return;
+    dotEl.style.left = `${50 + xNorm * 50}%`;
+    dotEl.style.top = `${50 - yNorm * 50}%`; // inverted: up on screen = higher value
+  };
+
   const applyFrame = (i) => {
     const relYaw = headingUnwrapped[i] - headingUnwrapped[0];
     const q = BBLAttitude3D.eulerQuaternion(ds.attRoll[i], ds.attPitch[i], -90 + relYaw);
     droneEl.style.transform = BBLAttitude3D.quaternionToCssMatrix3d(q);
     seekEl.value = i;
     readoutEl.textContent = `t=${ds.t[i].toFixed(1)}s   roll=${ds.attRoll[i].toFixed(0)}°   pitch=${ds.attPitch[i].toFixed(0)}°   heading=${ds.attHeading[i].toFixed(0)}°`;
+
+    if (ds.hasStick) {
+      positionDot(stickDotLeft, clampNorm(ds.stick[2][i], 0, 500), clampNorm(ds.stick[3][i], 1500, 500));
+      positionDot(stickDotRight, clampNorm(ds.stick[0][i], 0, 500), clampNorm(ds.stick[1][i], 0, 500));
+    }
   };
 
   const player = BBLAttitude3D.createPlayer(ds.t, applyFrame, { rate: 1 });
