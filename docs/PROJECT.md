@@ -475,6 +475,20 @@ step responses already covered in Phase 3.
   detection was implicitly checked by looking sane against the stick
   chart.
 
+## Post-launch additions (owner requests, after Phase 7)
+
+- **Stick position visualizer** (3D Attitude tab, next to the drone
+  model): two squares, Mode 2 layout (left = yaw/throttle, right =
+  roll/pitch), a dot showing live stick position, driven by the same
+  play/scrub controls as the 3D model. Uses Betaflight's fixed rcCommand
+  ranges (-500..+500 for roll/pitch/yaw, 1000..2000 for throttle), not
+  this flight's own min/max, so the dot only hits a corner on genuinely
+  full stick deflection. Verified against the real log at both throttle
+  extremes (1000 -> bottom edge, 2000 -> top edge exactly) and center.
+- **Git history rewrite**: see the entry under "Open issues" below -
+  `Co-Authored-By` trailers were stripped from all past commits and
+  won't be added to future ones, per owner request.
+
 ## Phase 7 details
 
 Three additions, all directly requested by the owner rather than
